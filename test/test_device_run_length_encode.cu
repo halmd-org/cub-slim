@@ -200,11 +200,11 @@ cudaError_t Dispatch(
     size_t                      *d_temp_storage_bytes,
     cudaError_t                 *d_cdp_error,
 
-    void*               d_temp_storage,
+    void                        *d_temp_storage,
     size_t                      &temp_storage_bytes,
     InputIteratorT              d_in,
     UniqueOutputIteratorT       d_unique_out,
-    cub::NullType               d_offsets_out,
+    OffsetsOutputIteratorT      d_offsets_out,
     LengthsOutputIteratorT      d_lengths_out,
     NumRunsIterator             d_num_runs,
     cub::Equality               equality_op,
@@ -212,8 +212,18 @@ cudaError_t Dispatch(
     cudaStream_t                stream,
     bool                        debug_synchronous)
 {
-    typedef typename std::iterator_traits<InputIteratorT>::value_type T;
-    typedef typename std::iterator_traits<LengthsOutputIteratorT>::value_type LengthT;
+    // The input value type
+    typedef typename std::iterator_traits<InputIteratorT>::value_type InputT;
+
+    // The output value type
+    typedef typename If<(Equals<typename std::iterator_traits<UniqueOutputIteratorT>::value_type, void>::VALUE),  // OutputT =  (if output iterator's value type is void) ?
+        typename std::iterator_traits<InputIteratorT>::value_type,                                                // ... then the input iterator's value type,
+        typename std::iterator_traits<UniqueOutputIteratorT>::value_type>::Type UniqueT;                          // ... else the output iterator's value type
+
+    // The lengths output value type
+    typedef typename If<(Equals<typename std::iterator_traits<LengthsOutputIteratorT>::value_type, void>::VALUE),   // LengthT =  (if output iterator's value type is void) ?
+        OffsetT,                                                                                                    // ... then the OffsetT type,
+        typename std::iterator_traits<LengthsOutputIteratorT>::value_type>::Type LengthT;                           // ... else the output iterator's value type
 
     if (d_temp_storage == 0)
     {
@@ -221,11 +231,11 @@ cudaError_t Dispatch(
     }
     else
     {
-        thrust::device_ptr<T>     d_in_wrapper(d_in);
-        thrust::device_ptr<T>     d_unique_out_wrapper(d_unique_out);
-        thrust::device_ptr<LengthT>   d_lengths_out_wrapper(d_lengths_out);
+        thrust::device_ptr<InputT>      d_in_wrapper(d_in);
+        thrust::device_ptr<UniqueT>     d_unique_out_wrapper(d_unique_out);
+        thrust::device_ptr<LengthT>     d_lengths_out_wrapper(d_lengths_out);
 
-        thrust::pair<thrust::device_ptr<T>, thrust::device_ptr<LengthT> > d_out_ends;
+        thrust::pair<thrust::device_ptr<UniqueT>, thrust::device_ptr<LengthT> > d_out_ends;
 
         LengthT one_val;
         InitValue(INTEGER_SEED, one_val, 1);
@@ -365,7 +375,7 @@ void Initialize(
     while (i < num_items)
     {
         // Select number of repeating occurrences for the current run
-        unsigned int repeat;
+        int repeat;
         if (max_segment < 0)
         {
             repeat = num_items;
@@ -377,7 +387,7 @@ void Initialize(
         else
         {
             RandomBits(repeat, entropy_reduction);
-            repeat = (unsigned int) ((double(repeat) * double(max_segment)) / double(max_int));
+            repeat = (int) ((double(repeat) * double(max_segment)) / double(max_int));
             repeat = CUB_MAX(1, repeat);
         }
 
@@ -561,9 +571,9 @@ void Test(
     if (g_timing_iterations > 0)
     {
         float avg_millis = elapsed_millis / g_timing_iterations;
-        float giga_rate = float(num_items) / avg_millis / 1000.0 / 1000.0;
+        float giga_rate = float(num_items) / avg_millis / 1000.0f / 1000.0f;
         int bytes_moved = (num_items * sizeof(T)) + (num_runs * (sizeof(OffsetT) + sizeof(LengthT)));
-        float giga_bandwidth = float(bytes_moved) / avg_millis / 1000.0 / 1000.0;
+        float giga_bandwidth = float(bytes_moved) / avg_millis / 1000.0f / 1000.0f;
         printf(", %.3f avg ms, %.3f billion items/s, %.3f logical GB/s", avg_millis, giga_rate, giga_bandwidth);
     }
     printf("\n\n");
@@ -660,7 +670,7 @@ void TestIterator(
     OffsetT* h_offsets_reference = new OffsetT[num_items];
     LengthT* h_lengths_reference = new LengthT[num_items];
 
-    LengthT one_val;
+    T one_val;
     InitValue(INTEGER_SEED, one_val, 1);
     ConstantInputIterator<T, int> h_in(one_val);
 
@@ -835,15 +845,18 @@ int main(int argc, char** argv)
     // Compile/run basic CUB test
     if (num_items < 0) num_items = 32000000;
 
-    TestPointer<RLE,         	CUB, int, int, int>(	num_items, entropy_reduction, max_segment);
-    TestPointer<NON_TRIVIAL, 	CUB, int, int, int>(	num_items, entropy_reduction, max_segment);
-    TestIterator<RLE, 			CUB, float, int, int>(	num_items, Int2Type<Traits<float>::PRIMITIVE>());
+    TestPointer<RLE,            CUB, int, int, int>(    num_items, entropy_reduction, max_segment);
+    TestPointer<NON_TRIVIAL,    CUB, int, int, int>(    num_items, entropy_reduction, max_segment);
+    TestIterator<RLE,           CUB, float, int, int>(  num_items, Int2Type<Traits<float>::PRIMITIVE>());
 
 
 #elif defined(QUICK_TEST)
 
     // Compile/run quick tests
     if (num_items < 0) num_items = 32000000;
+
+    TestPointer<RLE,            CUB, int, int, int>(    num_items, entropy_reduction, max_segment);
+    TestPointer<RLE,            THRUST, int, int, int>(    num_items, entropy_reduction, max_segment);
 
 #else
 

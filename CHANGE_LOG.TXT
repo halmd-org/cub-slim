@@ -1,3 +1,67 @@
+1.6.4    12/06/2016
+    - Updated sm_5x, sm_6x tuning policies for radix sorting (3.5B and 3.4B 
+      32b keys/s on TitanX and GTX 1080, respectively)
+    - Bug fixes: 
+        - Restore fence work-around for scan (reduce-by-key, etc.) hangs 
+          in CUDA 8.5
+        - Issue 65: DeviceSegmentedRadixSort should allow inputs to have 
+          pointer-to-const type 
+        - Mollify Clang device-side warnings
+        - Remove out-dated VC project files
+          		  
+//-----------------------------------------------------------------------------
+
+1.6.3    11/20/2016
+    - API change: BlockLoad and BlockStore are now templated by the local
+      data type, instead of the Iterator type.  This allows for output iterators
+      having \p void as their \p value_type (e.g., discard iterators).
+    - Updated GP100 tuning policies for radix sorting (6.2B 32b keys/s)
+    - Bug fixes: 
+        - Issue #74: Warpreduce executes reduction operator for out-of-bounds items
+        - Issue #72 (cub:InequalityWrapper::operator() should be non-const)
+        - Issue #71 (KeyVairPair won't work if Key has non-trivial ctor)
+		- Issue #70 1.5.3 breaks BlockScan API.  Retroactively reversioned
+		  from v1.5.3 -> v1.6 to appropriately indicate API change.
+		- Issue #69 cub::BlockStore::Store doesn't compile if OutputIteratorT::value_type != T  
+        - Issue #68 (cub::TilePrefixCallbackOp::WarpReduce doesn't permit ptx 
+          arch specialization)
+		- Improved support for Win32 platforms (warnings, alignment, etc)
+		  
+//-----------------------------------------------------------------------------
+
+1.6.2 (was 1.5.5)    10/25/2016
+    - Updated Pascal tuning policies for radix sorting
+    - Bug fixes: 
+        - Fix for arm64 compilation of caching allocator
+
+//-----------------------------------------------------------------------------
+
+1.6.1 (was 1.5.4)    10/14/2016
+    - Bug fixes: 
+        - Fix for radix sorting bug introduced by scan refactorization
+
+//-----------------------------------------------------------------------------
+
+1.6.0 (was 1.5.3)    10/11/2016
+    - API change: Device/block/warp-wide exclusive scans have been revised to now 
+      accept an "initial value" (instead of an "identity value") for seeding the 
+      computation with an arbitrary prefix.  
+    - API change: Device-wide reductions and scans can now have input sequence types that are 
+      different from output sequence types (as long as they are coercible)
+      value") for seeding the computation with an arbitrary prefix
+    - Reduce repository size (move doxygen binary to doc repository)
+    - Minor reductions in block-scan instruction count
+    - Bug fixes: 
+        - Issue #55: warning in cub/device/dispatch/dispatch_reduce_by_key.cuh 
+        - Issue #59: cub::DeviceScan::ExclusiveSum can't prefix sum of float into double
+        - Issue #58: Infinite loop in cub::CachingDeviceAllocator::NearestPowerOf
+        - Issue #47: Caching allocator needs to clean up cuda error upon successful retry 
+        - Issue #46: Very high amount of needed memory from the cub::DeviceHistogram::HistogramEven routine
+        - Issue #45: Caching Device Allocator fails with debug output enabled
+        - Fix for generic-type reduce-by-key warpscan (sm3.x and newer)
+
+//-----------------------------------------------------------------------------
+
 1.5.2    03/21/2016
 	- Improved medium-size scan performance for sm5x (Maxwell)
     - Refactored caching allocator for device memory

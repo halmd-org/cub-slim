@@ -537,7 +537,7 @@ __host__ __device__ __forceinline__ void InitValue(GenMode gen_mode, bool &value
     case RANDOM:
         char c;
         RandomBits(c, 0, 0, 1);
-        value = (bool) c;
+        value = (c > 0);
         break;
 #endif
      case UNIFORM:
@@ -545,7 +545,7 @@ __host__ __device__ __forceinline__ void InitValue(GenMode gen_mode, bool &value
         break;
     case INTEGER_SEED:
     default:
-        value = (bool) index;
+        value = (index > 0);
         break;
     }
 }
@@ -1430,9 +1430,9 @@ void DisplayResults(
 /**
  * Print the contents of a host array
  */
-template <typename T>
+template <typename InputIteratorT>
 void DisplayResults(
-    T *h_data,
+    InputIteratorT h_data,
     size_t num_items)
 {
     // Display data

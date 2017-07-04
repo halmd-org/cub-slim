@@ -40,6 +40,21 @@ else
     SM_ARCH = 200
 endif
 
+ifeq (620, $(findstring 620, $(SM_ARCH)))
+    SM_TARGETS 	+= -gencode=arch=compute_62,code=\"sm_62,compute_62\" 
+    SM_DEF 		+= -DSM620
+    TEST_ARCH 	= 620
+endif
+ifeq (610, $(findstring 610, $(SM_ARCH)))
+    SM_TARGETS 	+= -gencode=arch=compute_61,code=\"sm_61,compute_61\" 
+    SM_DEF 		+= -DSM610
+    TEST_ARCH 	= 610
+endif
+ifeq (600, $(findstring 600, $(SM_ARCH)))
+    SM_TARGETS 	+= -gencode=arch=compute_60,code=\"sm_60,compute_60\" 
+    SM_DEF 		+= -DSM600
+    TEST_ARCH 	= 600
+endif
 ifeq (520, $(findstring 520, $(SM_ARCH)))
     SM_TARGETS 	+= -gencode=arch=compute_52,code=\"sm_52,compute_52\" 
     SM_DEF 		+= -DSM520
@@ -169,12 +184,13 @@ NVCCFLAGS += $(SM_DEF) -Xptxas -v -Xcudafe -\#
 
 ifeq (WIN_NT, $(findstring WIN_NT, $(OSUPPER)))
     # For MSVC
+    # Enable more warnings and treat as errors
+    NVCCFLAGS += -Xcompiler /W3 -Xcompiler /WX
     # Disable excess x86 floating point precision that can lead to results being labeled incorrectly
     NVCCFLAGS += -Xcompiler /fp:strict
     # Help the compiler/linker work with huge numbers of kernels on Windows
 	NVCCFLAGS += -Xcompiler /bigobj -Xcompiler /Zm500
 	CC = cl
-	NPPI = -lnppi
 	
 	# Multithreaded runtime
 	NVCCFLAGS += -Xcompiler /MT

@@ -117,16 +117,22 @@ cudaError_t Dispatch(
     size_t                      *d_temp_storage_bytes,
     cudaError_t                 *d_cdp_error,
 
-    void*               d_temp_storage,
+    void                        *d_temp_storage,
     size_t                      &temp_storage_bytes,
     InputIteratorT              d_in,
-    OutputIteratorT              d_out,
-    NumSelectedIteratorT         d_num_selected_out,
+    OutputIteratorT             d_out,
+    NumSelectedIteratorT        d_num_selected_out,
     OffsetT                     num_items,
     cudaStream_t                stream,
     bool                        debug_synchronous)
 {
-    typedef typename std::iterator_traits<InputIteratorT>::value_type T;
+    // The input value type
+    typedef typename std::iterator_traits<InputIteratorT>::value_type InputT;
+
+    // The output value type
+    typedef typename If<(Equals<typename std::iterator_traits<OutputIteratorT>::value_type, void>::VALUE),  // OutputT =  (if output iterator's value type is void) ?
+        typename std::iterator_traits<InputIteratorT>::value_type,                                          // ... then the input iterator's value type,
+        typename std::iterator_traits<OutputIteratorT>::value_type>::Type OutputT;                          // ... else the output iterator's value type
 
     if (d_temp_storage == 0)
     {
@@ -134,9 +140,9 @@ cudaError_t Dispatch(
     }
     else
     {
-        thrust::device_ptr<T> d_out_wrapper_end;
-        thrust::device_ptr<T> d_in_wrapper(d_in);
-        thrust::device_ptr<T> d_out_wrapper(d_out);
+        thrust::device_ptr<OutputT> d_out_wrapper_end;
+        thrust::device_ptr<InputT> d_in_wrapper(d_in);
+        thrust::device_ptr<OutputT> d_out_wrapper(d_out);
         for (int i = 0; i < timing_timing_iterations; ++i)
         {
             d_out_wrapper_end = thrust::unique_copy(d_in_wrapper, d_in_wrapper + num_items, d_out_wrapper);
@@ -240,7 +246,7 @@ void Initialize(
     while (i < num_items)
     {
         // Select number of repeating occurrences for the current run
-        unsigned int repeat;
+        int repeat;
         if (max_segment < 0)
         {
             repeat = num_items;
@@ -252,7 +258,7 @@ void Initialize(
         else
         {
             RandomBits(repeat, entropy_reduction);
-            repeat = (unsigned int) ((double(repeat) * double(max_segment)) / double(max_int));
+            repeat = (int) ((double(repeat) * double(max_segment)) / double(max_int));
             repeat = CUB_MAX(1, repeat);
         }
 
@@ -368,8 +374,8 @@ void Test(
     if (g_timing_iterations > 0)
     {
         float avg_millis        = elapsed_millis / g_timing_iterations;
-        float giga_rate         = float(num_items) / avg_millis / 1000.0 / 1000.0;
-        float giga_bandwidth    = float((num_items + num_selected) * sizeof(T)) / avg_millis / 1000.0 / 1000.0;
+        float giga_rate         = float(num_items) / avg_millis / 1000.0f / 1000.0f;
+        float giga_bandwidth    = float((num_items + num_selected) * sizeof(T)) / avg_millis / 1000.0f / 1000.0f;
         printf(", %.3f avg ms, %.3f billion items/s, %.3f logical GB/s, %.1f%% peak", avg_millis, giga_rate, giga_bandwidth, giga_bandwidth / g_device_giga_bandwidth * 100.0);
     }
     printf("\n\n");
@@ -476,7 +482,7 @@ template <
 void Test(
     int             num_items)
 {
-    for (int max_segment = 1; max_segment < CUB_MIN(num_items, (unsigned int) -1); max_segment *= 11)
+    for (int max_segment = 1; ((max_segment > 0) && (max_segment < num_items)); max_segment *= 11)
     {
         TestPointer<BACKEND, T>(num_items, 0, max_segment);
         TestPointer<BACKEND, T>(num_items, 2, max_segment);
