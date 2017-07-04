@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -80,6 +80,8 @@ struct CommandLineArgs
     std::vector<std::string>    args;
     cudaDeviceProp              deviceProp;
     float                       device_giga_bandwidth;
+    size_t                      device_free_physmem;
+    size_t                      device_total_physmem;
 
     /**
      * Constructor
@@ -263,8 +265,7 @@ struct CommandLineArgs
             error = CubDebug(cudaSetDevice(dev));
             if (error) break;
 
-            size_t free_physmem, total_physmem;
-            CubDebugExit(cudaMemGetInfo(&free_physmem, &total_physmem));
+            CubDebugExit(cudaMemGetInfo(&device_free_physmem, &device_total_physmem));
 
             int ptx_version;
             error = CubDebug(cub::PtxVersion(ptx_version));
@@ -291,8 +292,8 @@ struct CommandLineArgs
                     ptx_version,
                     deviceProp.major * 100 + deviceProp.minor * 10,
                     deviceProp.multiProcessorCount,
-                    (unsigned long long) free_physmem / 1024 / 1024,
-                    (unsigned long long) total_physmem / 1024 / 1024,
+                    (unsigned long long) device_free_physmem / 1024 / 1024,
+                    (unsigned long long) device_total_physmem / 1024 / 1024,
                     device_giga_bandwidth,
                     deviceProp.memoryClockRate,
                     (deviceProp.ECCEnabled) ? "on" : "off");
@@ -381,6 +382,7 @@ __noinline__ bool IsNaN<double4>(double4 val)
     return (IsNaN(val.y) || IsNaN(val.x) || IsNaN(val.w) || IsNaN(val.z));
 }
 
+
 /**
  * Generates random keys.
  *
@@ -454,6 +456,19 @@ void RandomBits(
     }
 }
 
+/// Randomly select number between [0:max)
+template <typename T>
+T RandomValue(T max)
+{
+    unsigned int bits;
+    unsigned int max_int = (unsigned int) -1;
+    do {
+        RandomBits(bits);
+    } while (bits == max_int);
+
+    return (T) ((double(bits) / double(max_int)) * double(max));
+}
+
 
 /******************************************************************************
  * Console printing utilities
@@ -512,6 +527,31 @@ __host__ __device__ __forceinline__ void InitValue(GenMode gen_mode, T &value, i
 
 
 /**
+ * Initialize value (bool)
+ */
+__host__ __device__ __forceinline__ void InitValue(GenMode gen_mode, bool &value, int index = 0)
+{
+    switch (gen_mode)
+    {
+#if (CUB_PTX_ARCH == 0)
+    case RANDOM:
+        char c;
+        RandomBits(c, 0, 0, 1);
+        value = (bool) c;
+        break;
+#endif
+     case UNIFORM:
+        value = true;
+        break;
+    case INTEGER_SEED:
+    default:
+        value = (bool) index;
+        break;
+    }
+}
+
+
+/**
  * cub::NullType test initialization
  */
 __host__ __device__ __forceinline__ void InitValue(GenMode gen_mode, cub::NullType &value, int index = 0)
@@ -546,7 +586,7 @@ __host__ __device__ __forceinline__ void InitValue(
 template <typename Key, typename Value>
 std::ostream& operator<<(std::ostream& os, const cub::KeyValuePair<Key, Value> &val)
 {
-    os << '(' << val.key << ',' << val.value << ')';
+    os << '(' << CoutCast(val.key) << ',' << CoutCast(val.value) << ')';
     return os;
 }
 
@@ -558,7 +598,7 @@ std::ostream& operator<<(std::ostream& os, const cub::KeyValuePair<Key, Value> &
 /**
  * Vector1 overloads
  */
-#define CUB_VEC_OVERLOAD_1(T)                               \
+#define CUB_VEC_OVERLOAD_1(T, BaseT)                        \
     /* Ostream output */                                    \
     std::ostream& operator<<(                               \
         std::ostream& os,                                   \
@@ -600,19 +640,44 @@ std::ostream& operator<<(std::ostream& os, const cub::KeyValuePair<Key, Value> &
     {                                                       \
         return (a.x < b.x);                                 \
     }                                                       \
-    /* Summation (non-reference addends for VS2003 -O3 warpscan workaround */                                         \
+    /* Summation (non-reference addends for VS2003 -O3 warpscan workaround */                       \
     __host__ __device__ __forceinline__ T operator+(        \
-        T a,                                         \
-        T b)                                         \
+        T a,                                                \
+        T b)                                                \
     {                                                       \
-        T retval = {a.x + b.x};                             \
+        T retval = make_##T(a.x + b.x);                     \
         return retval;                                      \
-    }
+    }                                                       \
+    namespace cub {                                         \
+    template<>                                              \
+    struct NumericTraits<T>                                 \
+    {                                                       \
+        static const Category CATEGORY = NOT_A_NUMBER;      \
+        enum {                                              \
+            PRIMITIVE       = false,                        \
+            NULL_TYPE       = false,                        \
+        };                                                  \
+        static T Max()                                      \
+        {                                                   \
+            T retval = {                                    \
+                NumericTraits<BaseT>::Max()};               \
+            return retval;                                  \
+        }                                                   \
+        static T Lowest()                                   \
+        {                                                   \
+            T retval = {                                    \
+                NumericTraits<BaseT>::Lowest()};            \
+            return retval;                                  \
+        }                                                   \
+    };                                                      \
+    } /* namespace std */
+
+
 
 /**
  * Vector2 overloads
  */
-#define CUB_VEC_OVERLOAD_2(T)                               \
+#define CUB_VEC_OVERLOAD_2(T, BaseT)                        \
     /* Ostream output */                                    \
     std::ostream& operator<<(                               \
         std::ostream& os,                                   \
@@ -666,17 +731,43 @@ std::ostream& operator<<(std::ostream& os, const cub::KeyValuePair<Key, Value> &
         T a,                                         \
         T b)                                         \
     {                                                       \
-        T retval = {                                        \
+        T retval = make_##T(                                        \
             a.x + b.x,                                      \
-            a.y + b.y};                                     \
+            a.y + b.y);                                     \
         return retval;                                      \
-    }
+    }                                                       \
+    namespace cub {                                         \
+    template<>                                              \
+    struct NumericTraits<T>                                 \
+    {                                                       \
+        static const Category CATEGORY = NOT_A_NUMBER;      \
+        enum {                                              \
+            PRIMITIVE       = false,                        \
+            NULL_TYPE       = false,                        \
+        };                                                  \
+        static T Max()                                      \
+        {                                                   \
+            T retval = {                                    \
+                NumericTraits<BaseT>::Max(),                \
+                NumericTraits<BaseT>::Max()};               \
+            return retval;                                  \
+        }                                                   \
+        static T Lowest()                                   \
+        {                                                   \
+            T retval = {                                    \
+                NumericTraits<BaseT>::Lowest(),             \
+                NumericTraits<BaseT>::Lowest()};            \
+            return retval;                                  \
+        }                                                   \
+    };                                                      \
+    } /* namespace cub */
+
 
 
 /**
  * Vector3 overloads
  */
-#define CUB_VEC_OVERLOAD_3(T)                               \
+#define CUB_VEC_OVERLOAD_3(T, BaseT)                        \
     /* Ostream output */                                    \
     std::ostream& operator<<(                               \
         std::ostream& os,                                   \
@@ -733,20 +824,48 @@ std::ostream& operator<<(std::ostream& os, const cub::KeyValuePair<Key, Value> &
     }                                                       \
     /* Summation (non-reference addends for VS2003 -O3 warpscan workaround */                                         \
     __host__ __device__ __forceinline__ T operator+(        \
-        T a,                                         \
-        T b)                                         \
+        T a,                                                \
+        T b)                                                \
     {                                                       \
-        T retval = {                                        \
+        T retval = make_##T(                                        \
             a.x + b.x,                                      \
             a.y + b.y,                                      \
-            a.z + b.z};                                     \
+            a.z + b.z);                                     \
         return retval;                                      \
-    }
+    }                                                       \
+    namespace cub {                                         \
+    template<>                                              \
+    struct NumericTraits<T>                                 \
+    {                                                       \
+        static const Category CATEGORY = NOT_A_NUMBER;      \
+        enum {                                              \
+            PRIMITIVE       = false,                        \
+            NULL_TYPE       = false,                        \
+        };                                                  \
+        static T Max()                                      \
+        {                                                   \
+            T retval = {                                    \
+                NumericTraits<BaseT>::Max(),                \
+                NumericTraits<BaseT>::Max(),                \
+                NumericTraits<BaseT>::Max()};               \
+            return retval;                                  \
+        }                                                   \
+        static T Lowest()                                   \
+        {                                                   \
+            T retval = {                                    \
+                NumericTraits<BaseT>::Lowest(),             \
+                NumericTraits<BaseT>::Lowest(),             \
+                NumericTraits<BaseT>::Lowest()};            \
+            return retval;                                  \
+        }                                                   \
+    };                                                      \
+    } /* namespace cub */
+
 
 /**
  * Vector4 overloads
  */
-#define CUB_VEC_OVERLOAD_4(T)                               \
+#define CUB_VEC_OVERLOAD_4(T, BaseT)                        \
     /* Ostream output */                                    \
     std::ostream& operator<<(                               \
         std::ostream& os,                                   \
@@ -809,41 +928,70 @@ std::ostream& operator<<(std::ostream& os, const cub::KeyValuePair<Key, Value> &
     }                                                       \
     /* Summation (non-reference addends for VS2003 -O3 warpscan workaround */                                         \
     __host__ __device__ __forceinline__ T operator+(        \
-        T a,                                         \
-        T b)                                         \
+        T a,                                                \
+        T b)                                                \
     {                                                       \
-        T retval = {                                        \
+        T retval = make_##T(                                        \
             a.x + b.x,                                      \
             a.y + b.y,                                      \
             a.z + b.z,                                      \
-            a.w + b.w};                                     \
+            a.w + b.w);                                     \
         return retval;                                      \
-    }
+    }                                                       \
+    namespace cub {                                         \
+    template<>                                              \
+    struct NumericTraits<T>                                 \
+    {                                                       \
+        static const Category CATEGORY = NOT_A_NUMBER;      \
+        enum {                                              \
+            PRIMITIVE       = false,                        \
+            NULL_TYPE       = false,                        \
+        };                                                  \
+        static T Max()                                      \
+        {                                                   \
+            T retval = {                                    \
+                NumericTraits<BaseT>::Max(),                \
+                NumericTraits<BaseT>::Max(),                \
+                NumericTraits<BaseT>::Max(),                \
+                NumericTraits<BaseT>::Max()};               \
+            return retval;                                  \
+        }                                                   \
+        static T Lowest()                                   \
+        {                                                   \
+            T retval = {                                    \
+                NumericTraits<BaseT>::Lowest(),             \
+                NumericTraits<BaseT>::Lowest(),             \
+                NumericTraits<BaseT>::Lowest(),             \
+                NumericTraits<BaseT>::Lowest()};            \
+            return retval;                                  \
+        }                                                   \
+    };                                                      \
+    } /* namespace cub */
 
 /**
  * All vector overloads
  */
-#define CUB_VEC_OVERLOAD(BASE_T)                            \
-    CUB_VEC_OVERLOAD_1(BASE_T##1)                           \
-    CUB_VEC_OVERLOAD_2(BASE_T##2)                           \
-    CUB_VEC_OVERLOAD_3(BASE_T##3)                           \
-    CUB_VEC_OVERLOAD_4(BASE_T##4)
+#define CUB_VEC_OVERLOAD(COMPONENT_T, BaseT)                    \
+    CUB_VEC_OVERLOAD_1(COMPONENT_T##1, BaseT)                   \
+    CUB_VEC_OVERLOAD_2(COMPONENT_T##2, BaseT)                   \
+    CUB_VEC_OVERLOAD_3(COMPONENT_T##3, BaseT)                   \
+    CUB_VEC_OVERLOAD_4(COMPONENT_T##4, BaseT)
 
 /**
  * Define for types
  */
-CUB_VEC_OVERLOAD(char)
-CUB_VEC_OVERLOAD(short)
-CUB_VEC_OVERLOAD(int)
-CUB_VEC_OVERLOAD(long)
-CUB_VEC_OVERLOAD(longlong)
-CUB_VEC_OVERLOAD(uchar)
-CUB_VEC_OVERLOAD(ushort)
-CUB_VEC_OVERLOAD(uint)
-CUB_VEC_OVERLOAD(ulong)
-CUB_VEC_OVERLOAD(ulonglong)
-CUB_VEC_OVERLOAD(float)
-CUB_VEC_OVERLOAD(double)
+CUB_VEC_OVERLOAD(char, char)
+CUB_VEC_OVERLOAD(short, short)
+CUB_VEC_OVERLOAD(int, int)
+CUB_VEC_OVERLOAD(long, long)
+CUB_VEC_OVERLOAD(longlong, long long)
+CUB_VEC_OVERLOAD(uchar, unsigned char)
+CUB_VEC_OVERLOAD(ushort, unsigned short)
+CUB_VEC_OVERLOAD(uint, unsigned int)
+CUB_VEC_OVERLOAD(ulong, unsigned long)
+CUB_VEC_OVERLOAD(ulonglong, unsigned long long)
+CUB_VEC_OVERLOAD(float, float)
+CUB_VEC_OVERLOAD(double, double)
 
 
 //---------------------------------------------------------------------
@@ -868,7 +1016,7 @@ struct TestFoo
     }
 
     // Assignment from int operator
-    __host__ __device__ __forceinline__ TestFoo operator =(int b)
+    __host__ __device__ __forceinline__ TestFoo& operator =(int b)
     {
         x = b;
         y = b;
@@ -936,6 +1084,37 @@ __host__ __device__ __forceinline__ void InitValue(GenMode gen_mode, TestFoo &va
 }
 
 
+/// numeric_limits<TestFoo> specialization
+namespace cub {
+template<>
+struct NumericTraits<TestFoo>
+{
+    static const Category CATEGORY = NOT_A_NUMBER;
+    enum {
+        PRIMITIVE       = false,
+        NULL_TYPE       = false,
+    };
+    static TestFoo Max()
+    {
+        return TestFoo::MakeTestFoo(
+            NumericTraits<long long>::Max(),
+            NumericTraits<int>::Max(),
+            NumericTraits<short>::Max(),
+            NumericTraits<char>::Max());
+    }
+
+    static TestFoo Lowest()
+    {
+        return TestFoo::MakeTestFoo(
+            NumericTraits<long long>::Lowest(),
+            NumericTraits<int>::Lowest(),
+            NumericTraits<short>::Lowest(),
+            NumericTraits<char>::Lowest());
+    }
+};
+} // namespace cub
+
+
 //---------------------------------------------------------------------
 // Complex data type TestBar (with optimizations for fence-free warp-synchrony)
 //---------------------------------------------------------------------
@@ -961,7 +1140,7 @@ struct TestBar
     {}
 
     // Assignment from int operator
-    __host__ __device__ __forceinline__ TestBar operator =(int b)
+    __host__ __device__ __forceinline__ TestBar& operator =(int b)
     {
         x = b;
         y = b;
@@ -1021,6 +1200,32 @@ __host__ __device__ __forceinline__ void InitValue(GenMode gen_mode, TestBar &va
     InitValue(gen_mode, value.y, index);
 }
 
+/// numeric_limits<TestBar> specialization
+namespace cub {
+template<>
+struct NumericTraits<TestBar>
+{
+    static const Category CATEGORY = NOT_A_NUMBER;
+    enum {
+        PRIMITIVE       = false,
+        NULL_TYPE       = false,
+    };
+    static TestBar Max()
+    {
+        return TestBar(
+            NumericTraits<long long>::Max(),
+            NumericTraits<int>::Max());
+    }
+
+    static TestBar Lowest()
+    {
+        return TestBar(
+            NumericTraits<long long>::Lowest(),
+            NumericTraits<int>::Lowest());
+    }
+};
+} // namespace cub
+
 
 /******************************************************************************
  * Helper routines for list comparison and display
@@ -1063,7 +1268,7 @@ int CompareResults(float* computed, float* reference, OffsetT len, bool verbose 
             if (fraction > 0.0001)
             {
                 if (verbose) std::cout << "INCORRECT: [" << i << "]: "
-                    << CoutCast(computed[i]) << " != "
+                    << "(computed) " << CoutCast(computed[i]) << " != "
                     << CoutCast(reference[i]) << " (difference:" << difference << ", fraction: " << fraction << ")";
                 return 1;
             }
@@ -1259,6 +1464,41 @@ void DisplayDeviceResults(
     if (h_data) free(h_data);
 }
 
+
+/******************************************************************************
+ * Segment descriptor generation
+ ******************************************************************************/
+
+/**
+ * Initialize segments
+ */
+void InitializeSegments(
+    int     num_items,
+    int     num_segments,
+    int     *h_segment_offsets,
+    bool    verbose = false)
+{
+    if (num_segments <= 0)
+        return;
+
+    unsigned int expected_segment_length = (num_items + num_segments - 1) / num_segments;
+    int offset = 0;
+    for (int i = 0; i < num_segments; ++i)
+    {
+        h_segment_offsets[i] = offset;
+
+        unsigned int segment_length = RandomValue((expected_segment_length * 2) + 1);
+        offset += segment_length;
+        offset = CUB_MIN(offset, num_items);
+    }
+    h_segment_offsets[num_segments] = num_items;
+
+    if (verbose)
+    {
+        printf("Segment offsets: ");
+        DisplayResults(h_segment_offsets, num_segments + 1);
+    }
+}
 
 
 /******************************************************************************

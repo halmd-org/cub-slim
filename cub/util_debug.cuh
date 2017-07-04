@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -104,11 +104,11 @@ __host__ __device__ __forceinline__ cudaError_t Debug(
 /**
  * \brief Log macro for printf statements.
  */
-#if !defined(CubLog)
+#if !defined(_CubLog)
     #if (CUB_PTX_ARCH == 0)
-        #define CubLog(format, ...) printf(format,__VA_ARGS__);
+        #define _CubLog(format, ...) printf(format,__VA_ARGS__);
     #elif (CUB_PTX_ARCH >= 200)
-        #define CubLog(format, ...) printf("[block (%d,%d,%d), thread (%d,%d,%d)]: " format, blockIdx.z, blockIdx.y, blockIdx.x, threadIdx.z, threadIdx.y, threadIdx.x, __VA_ARGS__);
+        #define _CubLog(format, ...) printf("[block (%d,%d,%d), thread (%d,%d,%d)]: " format, blockIdx.z, blockIdx.y, blockIdx.x, threadIdx.z, threadIdx.y, threadIdx.x, __VA_ARGS__);
     #endif
 #endif
 

@@ -1,3 +1,46 @@
+1.5.2    03/21/2016
+	- Improved medium-size scan performance for sm5x (Maxwell)
+    - Refactored caching allocator for device memory
+   		- Spends less time locked
+		- Failure to allocate a block from the runtime will retry once after
+		  freeing cached allocations
+		- Now respects max-bin (issue where blocks in excess of max-bin were
+		  still being retained in free cache)
+		- Uses C++11 mutex when available
+    - Bug fixes: 
+        - Fix for generic-type reduce-by-key warpscan (sm3.x and newer)
+          
+//-----------------------------------------------------------------------------
+
+1.5.1    12/28/2015
+    - Bug fixes: 
+        - Fix for incorrect DeviceRadixSort output for some small problems on 
+          Maxwell SM52 architectures
+        - Fix for macro redefinition warnings when compiling with Thrust sort
+          
+//-----------------------------------------------------------------------------
+
+1.5.0    12/14/2015
+    - New Features:
+        - Added new segmented device-wide operations for device-wide sort and 
+          reduction primitives.
+    - Bug fixes: 
+        - Fix for Git Issue 36 (Compilation error with GCC 4.8.4 nvcc 7.0.27) and
+          Forums thread (ThreadLoad generates compiler errors when loading from 
+          pointer-to-const)
+        - Fix for Git Issue 29 (DeviceRadixSort::SortKeys<bool> yields compiler 
+          errors)
+        - Fix for Git Issue 26 (CUDA error: misaligned address after 
+          cub::DeviceRadixSort::SortKeys())
+        - Fix for incorrect/crash on 0-length problems, e.g., Git Issue 25 (Floating 
+          point exception (core dumped) during cub::DeviceRadixSort::SortKeys)
+        - Fix for CUDA 7.5 issues on SM 5.2 with SHFL-based warp-scan and warp-reduction 
+          on non-primitive data types (e.g., user-defined structs)
+        - Fix for small radix sorting problems where 0 temporary bytes were 
+          required and users code was invoking malloc(0) on some systems where
+          that returns NULL.  (Impl assumed was asking for size again and was not 
+          running the sort.)
+          
 //-----------------------------------------------------------------------------
 
 1.4.1    04/13/2015

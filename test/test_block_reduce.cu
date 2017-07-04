@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2015, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -36,6 +36,7 @@
 #include <stdio.h>
 
 #include <device_functions.h>
+#include <typeinfo>
 
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_load.cuh>
@@ -148,59 +149,64 @@ __global__ void FullTileReduceKernel(
 
     // Load first tile of data
     int block_offset = 0;
-    LoadDirectBlocked(linear_tid, d_in + block_offset, data);
-    block_offset += TILE_SIZE;
 
-    // Start cycle timer
-    clock_t start = clock();
-
-    // Cooperative reduce first tile
-    BlockReduceT block_reduce(temp_storage) ;
-    T block_aggregate = DeviceTest(block_reduce, data, reduction_op);
-
-    // Stop cycle timer
-#if CUB_PTX_ARCH == 100
-    // Bug: recording stop clock causes mis-write of running prefix value
-    clock_t stop = 0;
-#else
-    clock_t stop = clock();
-#endif // CUB_PTX_ARCH == 100
-    clock_t elapsed = (start > stop) ? start - stop : stop - start;
-
-    // Loop over input tiles
-    while (block_offset < TILE_SIZE * tiles)
+    if (block_offset < TILE_SIZE * tiles)
     {
-        // TestBarrier between threadblock reductions
-        __syncthreads();
-
-        // Load tile of data
         LoadDirectBlocked(linear_tid, d_in + block_offset, data);
         block_offset += TILE_SIZE;
 
         // Start cycle timer
         clock_t start = clock();
 
-        // Cooperatively reduce the tile's aggregate
-        T tile_aggregate = DeviceTest(block_reduce, data, reduction_op);
+        // Cooperative reduce first tile
+        BlockReduceT block_reduce(temp_storage) ;
+        T block_aggregate = DeviceTest(block_reduce, data, reduction_op);
 
         // Stop cycle timer
-    #if CUB_PTX_ARCH == 100
+ #if CUB_PTX_ARCH == 100
         // Bug: recording stop clock causes mis-write of running prefix value
         clock_t stop = 0;
-    #else
+#else
         clock_t stop = clock();
-    #endif // CUB_PTX_ARCH == 100
-        elapsed += (start > stop) ? start - stop : stop - start;
+#endif // CUB_PTX_ARCH == 100
+        clock_t elapsed = (start > stop) ? start - stop : stop - start;
 
-        // Reduce threadblock aggregate
-        block_aggregate = reduction_op(block_aggregate, tile_aggregate);
-    }
+        // Loop over input tiles
+        while (block_offset < TILE_SIZE * tiles)
+        {
+            // TestBarrier between threadblock reductions
+            __syncthreads();
+    
+            // Load tile of data
+            LoadDirectBlocked(linear_tid, d_in + block_offset, data);
+            block_offset += TILE_SIZE;
 
-    // Store data
-    if (linear_tid == 0)
-    {
-        d_out[0] = block_aggregate;
-        *d_elapsed = elapsed;
+            // Start cycle timer
+            clock_t start = clock();
+
+            // Cooperatively reduce the tile's aggregate
+            BlockReduceT block_reduce(temp_storage) ;
+            T tile_aggregate = DeviceTest(block_reduce, data, reduction_op);
+
+            // Stop cycle timer
+#if CUB_PTX_ARCH == 100
+            // Bug: recording stop clock causes mis-write of running prefix value
+            clock_t stop = 0;
+#else
+            clock_t stop = clock();
+#endif // CUB_PTX_ARCH == 100
+            elapsed += (start > stop) ? start - stop : stop - start;
+
+            // Reduce threadblock aggregate
+            block_aggregate = reduction_op(block_aggregate, tile_aggregate);
+        }
+
+        // Store data
+        if (linear_tid == 0)
+        {
+            d_out[0] = block_aggregate;
+            *d_elapsed = elapsed;
+        }
     }
 }
 
@@ -322,7 +328,6 @@ void TestFullTile(
     GenMode                 gen_mode,
     int                     tiles,
     ReductionOp             reduction_op,
-    const char              *type_string,
     Int2Type<true>          sufficient_resources)
 {
     const int BLOCK_THREADS     = BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z;
@@ -356,7 +361,7 @@ void TestFullTile(
         BLOCK_THREADS, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z,
         ITEMS_PER_THREAD,
         tiles,
-        type_string,
+        typeid(T).name(),
         (int) sizeof(T));
     fflush(stdout);
 
@@ -403,7 +408,6 @@ void TestFullTile(
     GenMode                 gen_mode,
     int                     tiles,
     ReductionOp             reduction_op,
-    const char              *type_string,
     Int2Type<false>         sufficient_resources)
 {}
 
@@ -422,19 +426,23 @@ template <
 void TestFullTile(
     GenMode                 gen_mode,
     int                     tiles,
-    ReductionOp             reduction_op,
-    const char              *type_string)
+    ReductionOp             reduction_op)
 {
     // Check size of smem storage for the target arch to make sure it will fit
     typedef BlockReduce<T, BLOCK_DIM_X, ALGORITHM, BLOCK_DIM_Y, BLOCK_DIM_Z, TEST_ARCH> BlockReduceT;
 
     enum 
     {
-        sufficient_smem       = (sizeof(typename BlockReduceT::TempStorage) <= CUB_SMEM_BYTES(TEST_ARCH)),
-        sufficient_threads    = ((BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z) <= CUB_MAX_BLOCK_THREADS(TEST_ARCH)),
+#if defined(SM100) || defined(SM110) || defined(SM130)
+        sufficient_smem       = (sizeof(typename BlockReduceT::TempStorage) <= 16 * 1024),
+        sufficient_threads    = ((BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z) <= 512),
+#else
+        sufficient_smem       = (sizeof(typename BlockReduceT::TempStorage) <= 48 * 1024),
+        sufficient_threads    = ((BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z) <= 1024),
+#endif
     };
 
-    TestFullTile<ALGORITHM, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z, ITEMS_PER_THREAD, T>(gen_mode, tiles, reduction_op, type_string, Int2Type<sufficient_smem && sufficient_threads>());
+    TestFullTile<ALGORITHM, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z, ITEMS_PER_THREAD, T>(gen_mode, tiles, reduction_op, Int2Type<sufficient_smem && sufficient_threads>());
 }
 
 
@@ -450,11 +458,10 @@ template <
 void TestFullTile(
     GenMode                 gen_mode,
     int                     tiles,
-    ReductionOp             reduction_op,
-    const char              *type_string)
+    ReductionOp             reduction_op)
 {
-    TestFullTile<ALGORITHM, BLOCK_THREADS, 1, 1, ITEMS_PER_THREAD, T>(gen_mode, tiles, reduction_op, type_string);
-    TestFullTile<ALGORITHM, BLOCK_THREADS, 2, 2, ITEMS_PER_THREAD, T>(gen_mode, tiles, reduction_op, type_string);
+    TestFullTile<ALGORITHM, BLOCK_THREADS, 1, 1, ITEMS_PER_THREAD, T>(gen_mode, tiles, reduction_op);
+    TestFullTile<ALGORITHM, BLOCK_THREADS, 2, 2, ITEMS_PER_THREAD, T>(gen_mode, tiles, reduction_op);
 }
 
 /**
@@ -468,11 +475,10 @@ template <
 void TestFullTile(
     GenMode                 gen_mode,
     int                     tiles,
-    ReductionOp             reduction_op,
-    const char              *type_string)
+    ReductionOp             reduction_op)
 {
-    TestFullTile<ALGORITHM, BLOCK_THREADS, 1, T>(gen_mode, tiles, reduction_op, type_string);
-    TestFullTile<ALGORITHM, BLOCK_THREADS, 4, T>(gen_mode, tiles, reduction_op, type_string);
+    TestFullTile<ALGORITHM, BLOCK_THREADS, 1, T>(gen_mode, tiles, reduction_op);
+    TestFullTile<ALGORITHM, BLOCK_THREADS, 4, T>(gen_mode, tiles, reduction_op);
 }
 
 
@@ -486,12 +492,11 @@ template <
     typename                ReductionOp>
 void TestFullTile(
     GenMode                 gen_mode,
-    ReductionOp             reduction_op,
-    const char              *type_string)
+    ReductionOp             reduction_op)
 {
     for (int tiles = 1; tiles < 3; tiles++)
     {
-        TestFullTile<ALGORITHM, BLOCK_THREADS, T>(gen_mode, tiles, reduction_op, type_string);
+        TestFullTile<ALGORITHM, BLOCK_THREADS, T>(gen_mode, tiles, reduction_op);
     }
 }
 
@@ -514,7 +519,6 @@ void TestPartialTile(
     GenMode                 gen_mode,
     int                     num_items,
     ReductionOp             reduction_op,
-    const char              *type_string,
     Int2Type<true>          sufficient_resources)
 {
     const int BLOCK_THREADS     = BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z;
@@ -542,7 +546,7 @@ void TestPartialTile(
         gen_mode,
         num_items,
         BLOCK_THREADS, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z,
-        type_string,
+        typeid(T).name(),
         (int) sizeof(T));
     fflush(stdout);
 
@@ -589,7 +593,6 @@ void TestPartialTile(
     GenMode                 gen_mode,
     int                     num_items,
     ReductionOp             reduction_op,
-    const char              *type_string,
     Int2Type<false>         sufficient_resources)
 {}
 
@@ -607,19 +610,23 @@ template <
 void TestPartialTile(
     GenMode                 gen_mode,
     int                     num_items,
-    ReductionOp             reduction_op,
-    const char              *type_string)
+    ReductionOp             reduction_op)
 {
     // Check size of smem storage for the target arch to make sure it will fit
     typedef BlockReduce<T, BLOCK_DIM_X, ALGORITHM, BLOCK_DIM_Y, BLOCK_DIM_Z, TEST_ARCH> BlockReduceT;
 
     enum 
     {
-        sufficient_smem       = sizeof(typename BlockReduceT::TempStorage) <= CUB_SMEM_BYTES(TEST_ARCH),
-        sufficient_threads    = (BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z) <= CUB_MAX_BLOCK_THREADS(TEST_ARCH),
+#if defined(SM100) || defined(SM110) || defined(SM130)
+        sufficient_smem       = sizeof(typename BlockReduceT::TempStorage)  <= 16 * 1024,
+        sufficient_threads    = (BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z)   <= 512,
+#else
+        sufficient_smem       = sizeof(typename BlockReduceT::TempStorage)  <= 48 * 1024,
+        sufficient_threads    = (BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z)   <= 1024,
+#endif
     };
 
-    TestPartialTile<ALGORITHM, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z, T>(gen_mode, num_items, reduction_op, type_string, Int2Type<sufficient_smem && sufficient_threads>());
+    TestPartialTile<ALGORITHM, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z, T>(gen_mode, num_items, reduction_op, Int2Type<sufficient_smem && sufficient_threads>());
 }
 
 
@@ -634,16 +641,15 @@ template <
     typename                ReductionOp>
 void TestPartialTile(
     GenMode                 gen_mode,
-    ReductionOp             reduction_op,
-    const char              *type_string)
+    ReductionOp             reduction_op)
 {
     for (
         int num_items = 1;
         num_items < BLOCK_THREADS;
         num_items += CUB_MAX(1, BLOCK_THREADS / 5))
     {
-        TestPartialTile<ALGORITHM, BLOCK_THREADS, 1, 1, T>(gen_mode, num_items, reduction_op, type_string);
-        TestPartialTile<ALGORITHM, BLOCK_THREADS, 2, 2, T>(gen_mode, num_items, reduction_op, type_string);
+        TestPartialTile<ALGORITHM, BLOCK_THREADS, 1, 1, T>(gen_mode, num_items, reduction_op);
+        TestPartialTile<ALGORITHM, BLOCK_THREADS, 2, 2, T>(gen_mode, num_items, reduction_op);
     }
 }
 
@@ -662,20 +668,19 @@ template <
     typename                T,
     typename                ReductionOp>
 void Test(
-    ReductionOp             reduction_op,
-    const char              *type_string)
+    ReductionOp             reduction_op)
 {
-    TestFullTile<ALGORITHM, BLOCK_THREADS, T>(UNIFORM, reduction_op, type_string);
-    TestPartialTile<ALGORITHM, BLOCK_THREADS, T>(UNIFORM, reduction_op, type_string);
+    TestFullTile<ALGORITHM, BLOCK_THREADS, T>(UNIFORM, reduction_op);
+    TestPartialTile<ALGORITHM, BLOCK_THREADS, T>(UNIFORM, reduction_op);
 
-    TestFullTile<ALGORITHM, BLOCK_THREADS, T>(INTEGER_SEED, reduction_op, type_string);
-    TestPartialTile<ALGORITHM, BLOCK_THREADS, T>(INTEGER_SEED, reduction_op, type_string);
+    TestFullTile<ALGORITHM, BLOCK_THREADS, T>(INTEGER_SEED, reduction_op);
+    TestPartialTile<ALGORITHM, BLOCK_THREADS, T>(INTEGER_SEED, reduction_op);
 
     if (Traits<T>::CATEGORY != FLOATING_POINT)
     {
         // Don't test randomly-generated floats b/c of stability
-        TestFullTile<ALGORITHM, BLOCK_THREADS, T>(RANDOM, reduction_op, type_string);
-        TestPartialTile<ALGORITHM, BLOCK_THREADS, T>(RANDOM, reduction_op, type_string);
+        TestFullTile<ALGORITHM, BLOCK_THREADS, T>(RANDOM, reduction_op);
+        TestPartialTile<ALGORITHM, BLOCK_THREADS, T>(RANDOM, reduction_op);
     }
 }
 
@@ -688,15 +693,14 @@ template <
     typename        T,
     typename        ReductionOp>
 void Test(
-    ReductionOp     reduction_op,
-    const char      *type_string)
+    ReductionOp     reduction_op)
 {
 #ifdef TEST_RAKING
-    Test<BLOCK_REDUCE_RAKING, BLOCK_THREADS, T>(reduction_op, type_string);
-    Test<BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY, BLOCK_THREADS, T>(reduction_op, type_string);
+    Test<BLOCK_REDUCE_RAKING, BLOCK_THREADS, T>(reduction_op);
+    Test<BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY, BLOCK_THREADS, T>(reduction_op);
 #endif
 #ifdef TEST_WARP_REDUCTIONS
-    Test<BLOCK_REDUCE_WARP_REDUCTIONS, BLOCK_THREADS, T>(reduction_op, type_string);
+    Test<BLOCK_REDUCE_WARP_REDUCTIONS, BLOCK_THREADS, T>(reduction_op);
 #endif
 }
 
@@ -708,15 +712,14 @@ template <
     typename        T,
     typename        ReductionOp>
 void Test(
-    ReductionOp     reduction_op,
-    const char      *type_string)
+    ReductionOp     reduction_op)
 {
-    Test<7,   T>(reduction_op, type_string);
-    Test<32,  T>(reduction_op, type_string);
-    Test<63,  T>(reduction_op, type_string);
-    Test<97,  T>(reduction_op, type_string);
-    Test<128, T>(reduction_op, type_string);
-    Test<238, T>(reduction_op, type_string);
+    Test<7,   T>(reduction_op);
+    Test<32,  T>(reduction_op);
+    Test<63,  T>(reduction_op);
+    Test<97,  T>(reduction_op);
+    Test<128, T>(reduction_op);
+    Test<238, T>(reduction_op);
 }
 
 
@@ -724,10 +727,10 @@ void Test(
  * Run battery of tests for different block sizes
  */
 template <typename T>
-void Test(const char* type_string)
+void Test()
 {
-    Test<T>(Sum(), type_string);
-    Test<T>(Max(), type_string);
+    Test<T>(Sum());
+    Test<T>(Max());
 }
 
 
@@ -766,19 +769,19 @@ int main(int argc, char** argv)
 
     printf("\n full tile ------------------------\n\n");
 
-    TestFullTile<BLOCK_REDUCE_RAKING,                   128, 1, 1, 4, int>(UNIFORM, 1, Sum(), CUB_TYPE_STRING(int));
-    TestFullTile<BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY,  128, 1, 1, 4, int>(UNIFORM, 1, Sum(), CUB_TYPE_STRING(int));
-    TestFullTile<BLOCK_REDUCE_WARP_REDUCTIONS,          128, 1, 1, 4, int>(UNIFORM, 1, Sum(), CUB_TYPE_STRING(int));
+    TestFullTile<BLOCK_REDUCE_RAKING,                   128, 1, 1, 4, int>(RANDOM, 1, Sum());
+    TestFullTile<BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY,  128, 1, 1, 4, int>(RANDOM, 1, Sum());
+    TestFullTile<BLOCK_REDUCE_WARP_REDUCTIONS,          128, 1, 1, 4, int>(RANDOM, 1, Sum());
 
-    TestFullTile<BLOCK_REDUCE_RAKING,                   128, 1, 1, 1, int>(UNIFORM, 1, Sum(), CUB_TYPE_STRING(int));
-    TestFullTile<BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY,  128, 1, 1, 1, int>(UNIFORM, 1, Sum(), CUB_TYPE_STRING(int));
-    TestFullTile<BLOCK_REDUCE_WARP_REDUCTIONS,          128, 1, 1, 1, int>(UNIFORM, 1, Sum(), CUB_TYPE_STRING(int));
+    TestFullTile<BLOCK_REDUCE_RAKING,                   128, 1, 1, 1, int>(RANDOM, 1, Sum());
+    TestFullTile<BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY,  128, 1, 1, 1, int>(RANDOM, 1, Sum());
+    TestFullTile<BLOCK_REDUCE_WARP_REDUCTIONS,          128, 1, 1, 1, int>(RANDOM, 1, Sum());
 
     printf("\n partial tile ------------------------\n\n");
 
-    TestPartialTile<BLOCK_REDUCE_RAKING,                   128, 1, 1, int>(UNIFORM, 7, Sum(), CUB_TYPE_STRING(int));
-    TestPartialTile<BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY,  128, 1, 1, int>(UNIFORM, 7, Sum(), CUB_TYPE_STRING(int));
-    TestPartialTile<BLOCK_REDUCE_WARP_REDUCTIONS,          128, 1, 1, int>(UNIFORM, 7, Sum(), CUB_TYPE_STRING(int));
+    TestPartialTile<BLOCK_REDUCE_RAKING,                   128, 1, 1, int>(RANDOM, 7, Sum());
+    TestPartialTile<BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY,  128, 1, 1, int>(RANDOM, 7, Sum());
+    TestPartialTile<BLOCK_REDUCE_WARP_REDUCTIONS,          128, 1, 1, int>(RANDOM, 7, Sum());
 
 #else
 
@@ -786,27 +789,29 @@ int main(int argc, char** argv)
     for (int i = 0; i <= g_repeat; ++i)
     {
         // primitives
-        Test<char>(CUB_TYPE_STRING(char));
-        Test<short>(CUB_TYPE_STRING(short));
-        Test<int>(CUB_TYPE_STRING(int));
-        Test<long long>(CUB_TYPE_STRING(long long));
+        Test<char>();
+        Test<short>();
+        Test<int>();
+        Test<long long>();
         if (ptx_version > 120)                          // Don't check doubles on PTX120 or below because they're down-converted
-            Test<double>(CUB_TYPE_STRING(double));
+            Test<double>();
+
+        Test<float>();
 
         // vector types
-        Test<char2>(CUB_TYPE_STRING(char2));
-        Test<short2>(CUB_TYPE_STRING(short2));
-        Test<int2>(CUB_TYPE_STRING(int2));
-        Test<longlong2>(CUB_TYPE_STRING(longlong2));
+        Test<char2>();
+        Test<short2>();
+        Test<int2>();
+        Test<longlong2>();
 
-        Test<char4>(CUB_TYPE_STRING(char4));
-        Test<short4>(CUB_TYPE_STRING(short4));
-        Test<int4>(CUB_TYPE_STRING(int4));
-        Test<longlong4>(CUB_TYPE_STRING(longlong4));
+        Test<char4>();
+        Test<short4>();
+        Test<int4>();
+        Test<longlong4>();
 
         // Complex types
-        Test<TestFoo>(CUB_TYPE_STRING(TestFoo));
-        Test<TestBar>(CUB_TYPE_STRING(TestBar));
+        Test<TestFoo>();
+        Test<TestBar>();
     }
 
 #endif
