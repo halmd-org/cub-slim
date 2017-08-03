@@ -222,12 +222,13 @@ cudaError_t MaxSmOccupancy(
 
 #else
 
+#if CUDART_VERSION >= 6500
     return cudaOccupancyMaxActiveBlocksPerMultiprocessor (
         &max_sm_occupancy,
         kernel_ptr,
         block_threads,
         0);
-/*
+#else
     cudaError_t error = cudaSuccess;
     do
     {
@@ -297,7 +298,7 @@ cudaError_t MaxSmOccupancy(
     } while (0);
 
     return error;
-*/
+#endif
 #endif  // CUB_RUNTIME_ENABLED
 }
 
