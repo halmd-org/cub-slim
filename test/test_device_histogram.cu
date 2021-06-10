@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -43,6 +43,7 @@
 #endif
 
 #include <cub/util_allocator.cuh>
+#include <cub/iterator/constant_input_iterator.cuh>
 #include <cub/device/device_histogram.cuh>
 
 #include "test_util.h"
@@ -83,7 +84,7 @@ CachingDeviceAllocator  g_allocator(true);
  * Dispatch to single-channel 8b NPP histo-even
  */
 template <typename CounterT, typename LevelT, typename OffsetT>
-CUB_RUNTIME_FUNCTION __forceinline__
+//CUB_RUNTIME_FUNCTION __forceinline__
 cudaError_t DispatchEven(
     Int2Type<1>             num_channels,
     Int2Type<1>             num_active_channels,
@@ -144,7 +145,7 @@ cudaError_t DispatchEven(
  * Dispatch to 3/4 8b NPP histo-even
  */
 template <typename CounterT, typename LevelT, typename OffsetT>
-CUB_RUNTIME_FUNCTION __forceinline__
+//CUB_RUNTIME_FUNCTION __forceinline__
 cudaError_t DispatchEven(
     Int2Type<4>          num_channels,
     Int2Type<3>   num_active_channels,
@@ -208,195 +209,193 @@ cudaError_t DispatchEven(
 // Dispatch to different DeviceHistogram entrypoints
 //---------------------------------------------------------------------
 
-/**
- * Dispatch to CUB single histogram-even entrypoint
- */
-template <typename SampleIteratorT, typename CounterT, typename LevelT, typename OffsetT>
-CUB_RUNTIME_FUNCTION __forceinline__
-cudaError_t DispatchEven(
-    Int2Type<1>             num_channels,
-    Int2Type<1>             num_active_channels,
-    Int2Type<CUB>           dispatch_to,
-    int                     timing_timing_iterations,
-    size_t                  *d_temp_storage_bytes,
-    cudaError_t             *d_cdp_error,
+template <int NUM_ACTIVE_CHANNELS, int NUM_CHANNELS, int BACKEND>
+struct Dispatch;
 
-    void*               d_temp_storage,
-    size_t&             temp_storage_bytes,
-    SampleIteratorT     d_samples,                                  ///< [in] The pointer to the multi-channel input sequence of data samples. The samples from different channels are assumed to be interleaved (e.g., an array of 32-bit pixels where each pixel consists of four RGBA 8-bit samples).
-    CounterT            *d_histogram[1],                            ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
-    int                 num_levels[1],                              ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
-    LevelT              lower_level[1],                             ///< [in] The lower sample value bound (inclusive) for the lowest histogram bin in each active channel.
-    LevelT              upper_level[1],                             ///< [in] The upper sample value bound (exclusive) for the highest histogram bin in each active channel.
-    OffsetT             num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
-    OffsetT             num_rows,                                   ///< [in] The number of rows in the region of interest
-    OffsetT             row_stride_bytes,                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
-    cudaStream_t        stream,
-    bool                debug_synchronous)
+template <int NUM_ACTIVE_CHANNELS, int NUM_CHANNELS>
+struct Dispatch<NUM_ACTIVE_CHANNELS, NUM_CHANNELS, CUB>
 {
-    typedef typename std::iterator_traits<SampleIteratorT>::value_type SampleT;
+    /**
+     * Dispatch to CUB multi histogram-range entrypoint
+     */
+    template <typename SampleIteratorT, typename CounterT, typename LevelT, typename OffsetT>
+    //CUB_RUNTIME_FUNCTION __forceinline__
+    static cudaError_t Range(
+        int                     timing_timing_iterations,
+        size_t                  *d_temp_storage_bytes,
+        cudaError_t             *d_cdp_error,
 
-    cudaError_t error = cudaSuccess;
-    for (int i = 0; i < timing_timing_iterations; ++i)
+        void*               d_temp_storage,
+        size_t&             temp_storage_bytes,
+        SampleIteratorT     d_samples,                                  ///< [in] The pointer to the multi-channel input sequence of data samples. The samples from different channels are assumed to be interleaved (e.g., an array of 32-bit pixels where each pixel consists of four RGBA 8-bit samples).
+        CounterT            *(&d_histogram)[NUM_ACTIVE_CHANNELS],       ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
+        int                 *num_levels,                                ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
+        LevelT              *(&d_levels)[NUM_ACTIVE_CHANNELS],          ///< [in] The pointers to the arrays of boundaries (levels), one for each active channel.  Bin ranges are defined by consecutive boundary pairings: lower sample value boundaries are inclusive and upper sample value boundaries are exclusive.
+        OffsetT             num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
+        OffsetT             num_rows,                                   ///< [in] The number of rows in the region of interest
+        OffsetT             row_stride_bytes,                           ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+        cudaStream_t        stream,
+        bool                debug_synchronous)
     {
-        error = DeviceHistogram::HistogramEven(
-            d_temp_storage,
-            temp_storage_bytes,
-            (const SampleT *) d_samples,
-            d_histogram[0],
-            num_levels[0],
-            lower_level[0],
-            upper_level[0],
-            num_row_pixels,
-            num_rows,
-            row_stride_bytes,
-            stream,
-            debug_synchronous);
+        cudaError_t error = cudaSuccess;
+
+        for (int i = 0; i < timing_timing_iterations; ++i)
+        {
+            error = DeviceHistogram::MultiHistogramRange<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
+                d_temp_storage,
+                temp_storage_bytes,
+                d_samples,
+                d_histogram,
+                num_levels,
+                d_levels,
+                num_row_pixels,
+                num_rows,
+                row_stride_bytes,
+                stream,
+                debug_synchronous);
+        }
+        return error;
     }
-    return error;
-}
 
-/**
- * Dispatch to CUB multi histogram-even entrypoint
- */
-template <int NUM_ACTIVE_CHANNELS, int NUM_CHANNELS, typename SampleIteratorT, typename CounterT, typename LevelT, typename OffsetT>
-CUB_RUNTIME_FUNCTION __forceinline__
-cudaError_t DispatchEven(
-    Int2Type<NUM_CHANNELS>          num_channels,
-    Int2Type<NUM_ACTIVE_CHANNELS>   num_active_channels,
-    Int2Type<CUB>           dispatch_to,
-    int                     timing_timing_iterations,
-    size_t                  *d_temp_storage_bytes,
-    cudaError_t             *d_cdp_error,
 
-    void*               d_temp_storage,
-    size_t&             temp_storage_bytes,
-    SampleIteratorT     d_samples,                                  ///< [in] The pointer to the multi-channel input sequence of data samples. The samples from different channels are assumed to be interleaved (e.g., an array of 32-bit pixels where each pixel consists of four RGBA 8-bit samples).
-    CounterT            *d_histogram[NUM_ACTIVE_CHANNELS],          ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
-    int                 num_levels[NUM_ACTIVE_CHANNELS],            ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
-    LevelT              lower_level[NUM_ACTIVE_CHANNELS],           ///< [in] The lower sample value bound (inclusive) for the lowest histogram bin in each active channel.
-    LevelT              upper_level[NUM_ACTIVE_CHANNELS],           ///< [in] The upper sample value bound (exclusive) for the highest histogram bin in each active channel.
-    OffsetT             num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
-    OffsetT             num_rows,                                   ///< [in] The number of rows in the region of interest
-    OffsetT             row_stride_bytes,                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
-    cudaStream_t        stream,
-    bool                debug_synchronous)
+    /**
+     * Dispatch to CUB multi histogram-even entrypoint
+     */
+    template <typename SampleIteratorT, typename CounterT, typename LevelT, typename OffsetT>
+    //CUB_RUNTIME_FUNCTION __forceinline__
+    static cudaError_t Even(
+        int                     timing_timing_iterations,
+        size_t                  *d_temp_storage_bytes,
+        cudaError_t             *d_cdp_error,
+
+        void*               d_temp_storage,
+        size_t&             temp_storage_bytes,
+        SampleIteratorT     d_samples,                                  ///< [in] The pointer to the multi-channel input sequence of data samples. The samples from different channels are assumed to be interleaved (e.g., an array of 32-bit pixels where each pixel consists of four RGBA 8-bit samples).
+        CounterT            *(&d_histogram)[NUM_ACTIVE_CHANNELS],          ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
+        int                 *num_levels,            ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
+        LevelT              *lower_level,           ///< [in] The lower sample value bound (inclusive) for the lowest histogram bin in each active channel.
+        LevelT              *upper_level,           ///< [in] The upper sample value bound (exclusive) for the highest histogram bin in each active channel.
+        OffsetT             num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
+        OffsetT             num_rows,                                   ///< [in] The number of rows in the region of interest
+        OffsetT             row_stride_bytes,                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+        cudaStream_t        stream,
+        bool                debug_synchronous)
+    {
+        typedef typename std::iterator_traits<SampleIteratorT>::value_type SampleT;
+
+        cudaError_t error = cudaSuccess;
+        for (int i = 0; i < timing_timing_iterations; ++i)
+        {
+            error = DeviceHistogram::MultiHistogramEven<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
+                d_temp_storage,
+                temp_storage_bytes,
+                d_samples,
+                d_histogram,
+                num_levels,
+                lower_level,
+                upper_level,
+                num_row_pixels,
+                num_rows,
+                row_stride_bytes,
+                stream,
+                debug_synchronous);
+        }
+        return error;
+    }
+
+};
+
+
+template <>
+struct Dispatch<1, 1, CUB>
 {
-    typedef typename std::iterator_traits<SampleIteratorT>::value_type SampleT;
 
-    cudaError_t error = cudaSuccess;
-    for (int i = 0; i < timing_timing_iterations; ++i)
+    /**
+     * Dispatch to CUB single histogram-range entrypoint
+     */
+    template <typename SampleIteratorT, typename CounterT, typename LevelT, typename OffsetT>
+    //CUB_RUNTIME_FUNCTION __forceinline__
+    static cudaError_t Range(
+        int                     timing_timing_iterations,
+        size_t                  *d_temp_storage_bytes,
+        cudaError_t             *d_cdp_error,
+
+        void*               d_temp_storage,
+        size_t&             temp_storage_bytes,
+        SampleIteratorT     d_samples,                              ///< [in] The pointer to the multi-channel input sequence of data samples. The samples from different channels are assumed to be interleaved (e.g., an array of 32-bit pixels where each pixel consists of four RGBA 8-bit samples).
+        CounterT*           (&d_histogram)[1],                      ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
+        int                 *num_levels,                            ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
+        LevelT              (&d_levels)[1],                         ///< [in] The pointers to the arrays of boundaries (levels), one for each active channel.  Bin ranges are defined by consecutive boundary pairings: lower sample value boundaries are inclusive and upper sample value boundaries are exclusive.
+        OffsetT             num_row_pixels,                         ///< [in] The number of multi-channel pixels per row in the region of interest
+        OffsetT             num_rows,                               ///< [in] The number of rows in the region of interest
+        OffsetT             row_stride_bytes,                       ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+        cudaStream_t        stream,
+        bool                debug_synchronous)
     {
-        error = DeviceHistogram::MultiHistogramEven<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
-            d_temp_storage,
-            temp_storage_bytes,
-            (const SampleT *) d_samples,
-            d_histogram,
-            num_levels,
-            lower_level,
-            upper_level,
-            num_row_pixels,
-            num_rows,
-            row_stride_bytes,
-            stream,
-            debug_synchronous);
+        cudaError_t error = cudaSuccess;
+        for (int i = 0; i < timing_timing_iterations; ++i)
+        {
+            error = DeviceHistogram::HistogramRange(
+                d_temp_storage,
+                temp_storage_bytes,
+                d_samples,
+                d_histogram[0],
+                num_levels[0],
+                d_levels[0],
+                num_row_pixels,
+                num_rows,
+                row_stride_bytes,
+                stream,
+                debug_synchronous);
+        }
+        return error;
     }
-    return error;
-}
 
 
-/**
- * Dispatch to CUB single histogram-range entrypoint
- */
-template <typename SampleIteratorT, typename CounterT, typename LevelT, typename OffsetT>
-CUB_RUNTIME_FUNCTION __forceinline__
-cudaError_t DispatchRange(
-    Int2Type<1>             num_channels,
-    Int2Type<1>             num_active_channels,
-    Int2Type<CUB>           dispatch_to,
-    int                     timing_timing_iterations,
-    size_t                  *d_temp_storage_bytes,
-    cudaError_t             *d_cdp_error,
+    /**
+     * Dispatch to CUB single histogram-even entrypoint
+     */
+    template <typename SampleIteratorT, typename CounterT, typename LevelT, typename OffsetT>
+    //CUB_RUNTIME_FUNCTION __forceinline__
+    static cudaError_t Even(
+        int                     timing_timing_iterations,
+        size_t                  *d_temp_storage_bytes,
+        cudaError_t             *d_cdp_error,
 
-    void*               d_temp_storage,
-    size_t&             temp_storage_bytes,
-    SampleIteratorT     d_samples,                                  ///< [in] The pointer to the multi-channel input sequence of data samples. The samples from different channels are assumed to be interleaved (e.g., an array of 32-bit pixels where each pixel consists of four RGBA 8-bit samples).
-    CounterT            *d_histogram[1],                            ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
-    int                 num_levels[1],                              ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
-    LevelT              *d_levels[1],                               ///< [in] The pointers to the arrays of boundaries (levels), one for each active channel.  Bin ranges are defined by consecutive boundary pairings: lower sample value boundaries are inclusive and upper sample value boundaries are exclusive.
-    OffsetT             num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
-    OffsetT             num_rows,                                   ///< [in] The number of rows in the region of interest
-    OffsetT             row_stride_bytes,                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
-    cudaStream_t        stream,
-    bool                debug_synchronous)
-{
-    typedef typename std::iterator_traits<SampleIteratorT>::value_type SampleT;
-
-    cudaError_t error = cudaSuccess;
-    for (int i = 0; i < timing_timing_iterations; ++i)
+        void*               d_temp_storage,
+        size_t&             temp_storage_bytes,
+        SampleIteratorT     d_samples,                                  ///< [in] The pointer to the multi-channel input sequence of data samples. The samples from different channels are assumed to be interleaved (e.g., an array of 32-bit pixels where each pixel consists of four RGBA 8-bit samples).
+        CounterT*           (&d_histogram)[1],                      ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
+        int                 *num_levels,                              ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
+        LevelT              *lower_level,                             ///< [in] The lower sample value bound (inclusive) for the lowest histogram bin in each active channel.
+        LevelT              *upper_level,                             ///< [in] The upper sample value bound (exclusive) for the highest histogram bin in each active channel.
+        OffsetT             num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
+        OffsetT             num_rows,                                   ///< [in] The number of rows in the region of interest
+        OffsetT             row_stride_bytes,                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+        cudaStream_t        stream,
+        bool                debug_synchronous)
     {
-        error = DeviceHistogram::HistogramRange(
-            d_temp_storage,
-            temp_storage_bytes,
-            (const SampleT *) d_samples,
-            d_histogram[0],
-            num_levels[0],
-            d_levels[0],
-            num_row_pixels,
-            num_rows,
-            row_stride_bytes,
-            stream,
-            debug_synchronous);
+        cudaError_t error = cudaSuccess;
+        for (int i = 0; i < timing_timing_iterations; ++i)
+        {
+            error = DeviceHistogram::HistogramEven(
+                d_temp_storage,
+                temp_storage_bytes,
+                d_samples,
+                d_histogram[0],
+                num_levels[0],
+                lower_level[0],
+                upper_level[0],
+                num_row_pixels,
+                num_rows,
+                row_stride_bytes,
+                stream,
+                debug_synchronous);
+        }
+        return error;
     }
-    return error;
-}
 
-
-/**
- * Dispatch to CUB multi histogram-range entrypoint
- */
-template <int NUM_ACTIVE_CHANNELS, int NUM_CHANNELS, typename SampleIteratorT, typename CounterT, typename LevelT, typename OffsetT>
-CUB_RUNTIME_FUNCTION __forceinline__
-cudaError_t DispatchRange(
-    Int2Type<NUM_CHANNELS>          num_channels,
-    Int2Type<NUM_ACTIVE_CHANNELS>   num_active_channels,
-    Int2Type<CUB>           dispatch_to,
-    int                     timing_timing_iterations,
-    size_t                  *d_temp_storage_bytes,
-    cudaError_t             *d_cdp_error,
-
-    void*               d_temp_storage,
-    size_t&             temp_storage_bytes,
-    SampleIteratorT     d_samples,                                  ///< [in] The pointer to the multi-channel input sequence of data samples. The samples from different channels are assumed to be interleaved (e.g., an array of 32-bit pixels where each pixel consists of four RGBA 8-bit samples).
-    CounterT            *d_histogram[NUM_ACTIVE_CHANNELS],          ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
-    int                 num_levels[NUM_ACTIVE_CHANNELS],            ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
-    LevelT              *d_levels[NUM_ACTIVE_CHANNELS],             ///< [in] The pointers to the arrays of boundaries (levels), one for each active channel.  Bin ranges are defined by consecutive boundary pairings: lower sample value boundaries are inclusive and upper sample value boundaries are exclusive.
-    OffsetT             num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
-    OffsetT             num_rows,                                   ///< [in] The number of rows in the region of interest
-    OffsetT             row_stride_bytes,                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
-    cudaStream_t        stream,
-    bool                debug_synchronous)
-{
-    typedef typename std::iterator_traits<SampleIteratorT>::value_type SampleT;
-
-    cudaError_t error = cudaSuccess;
-    for (int i = 0; i < timing_timing_iterations; ++i)
-    {
-        error = DeviceHistogram::MultiHistogramRange<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
-            d_temp_storage,
-            temp_storage_bytes,
-            (const SampleT *) d_samples,
-            d_histogram,
-            num_levels,
-            d_levels,
-            num_row_pixels,
-            num_rows,
-            row_stride_bytes,
-            stream,
-            debug_synchronous);
-    }
-    return error;
-}
+};
 
 
 
@@ -583,28 +582,65 @@ void Sample(T &datum, LevelT max_level, int entropy_reduction)
 
 
 /**
- * Initialize histogram problem (and solution)
+ * Initialize histogram samples
  */
 template <
     int             NUM_CHANNELS,
     int             NUM_ACTIVE_CHANNELS,
     typename        LevelT,
     typename        SampleT,
-    typename        CounterT,
-    typename        TransformOp,
     typename        OffsetT>
-void Initialize(
+void InitializeSamples(
     LevelT          max_level,
     int             entropy_reduction,
     SampleT         *h_samples,
+    OffsetT         num_row_pixels,         ///< [in] The number of multi-channel pixels per row in the region of interest
+    OffsetT         num_rows,               ///< [in] The number of rows in the region of interest
+    OffsetT         row_stride_bytes)       ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+{
+    // Initialize samples
+    for (OffsetT row = 0; row < num_rows; ++row)
+    {
+        for (OffsetT pixel = 0; pixel < num_row_pixels; ++pixel)
+        {
+            for (int channel = 0; channel < NUM_ACTIVE_CHANNELS; ++channel)
+            {
+                // Sample offset
+                OffsetT offset = (row * (row_stride_bytes / sizeof(SampleT))) + (pixel * NUM_CHANNELS) + channel;
+
+                // Init sample value
+                Sample(h_samples[offset], max_level, entropy_reduction);
+                if (g_verbose_input)
+                {
+                    if (channel > 0) printf(", ");
+                    std::cout << CoutCast(h_samples[offset]);
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * Initialize histogram solutions
+ */
+template <
+    int             NUM_CHANNELS,
+    int             NUM_ACTIVE_CHANNELS,
+    typename        CounterT,
+    typename        SampleIteratorT,
+    typename        TransformOp,
+    typename        OffsetT>
+void InitializeBins(
+    SampleIteratorT h_samples,
     int             num_levels[NUM_ACTIVE_CHANNELS],        ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
     TransformOp     transform_op[NUM_ACTIVE_CHANNELS],      ///< [in] The lower sample value bound (inclusive) for the lowest histogram bin in each active channel.
     CounterT        *h_histogram[NUM_ACTIVE_CHANNELS],      ///< [out] The pointers to the histogram counter output arrays, one for each active channel.  For channel<sub><em>i</em></sub>, the allocation length of <tt>d_histograms[i]</tt> should be <tt>num_levels[i]</tt> - 1.
     OffsetT         num_row_pixels,                         ///< [in] The number of multi-channel pixels per row in the region of interest
     OffsetT         num_rows,                               ///< [in] The number of rows in the region of interest
-    OffsetT         row_stride_bytes)                             ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+    OffsetT         row_stride_bytes)                       ///< [in] The number of bytes between starts of consecutive rows in the region of interest
 {
-    printf("Initializing... "); fflush(stdout);
+    typedef typename std::iterator_traits<SampleIteratorT>::value_type SampleT;
 
     // Init bins
     for (int CHANNEL = 0; CHANNEL < NUM_ACTIVE_CHANNELS; ++CHANNEL)
@@ -627,14 +663,6 @@ void Initialize(
                 // Sample offset
                 OffsetT offset = (row * (row_stride_bytes / sizeof(SampleT))) + (pixel * NUM_CHANNELS) + channel;
 
-                // Init sample value
-                Sample(h_samples[offset], max_level, entropy_reduction);
-                if (g_verbose_input)
-                {
-                    if (channel > 0) printf(", ");
-                    std::cout << CoutCast(h_samples[offset]);
-                }
-
                 // Update sample bin
                 int bin = transform_op[channel](h_samples[offset]);
                 if (g_verbose_input) printf(" (%d)", bin); fflush(stdout);
@@ -648,9 +676,8 @@ void Initialize(
         }
         if (g_verbose_input) printf("\n\n");
     }
-
-    printf("Done\n"); fflush(stdout);
 }
+
 
 
 /**
@@ -663,7 +690,8 @@ template <
     typename        SampleT,
     typename        CounterT,
     typename        LevelT,
-    typename        OffsetT>
+    typename        OffsetT,
+    typename        SampleIteratorT>
 void TestEven(
     LevelT          max_level,
     int             entropy_reduction,
@@ -672,13 +700,16 @@ void TestEven(
     LevelT          upper_level[NUM_ACTIVE_CHANNELS],           ///< [in] The upper sample value bound (exclusive) for the highest histogram bin in each active channel.
     OffsetT         num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
     OffsetT         num_rows,                                   ///< [in] The number of rows in the region of interest
-    OffsetT         row_stride_bytes)                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+    OffsetT         row_stride_bytes,                           ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+    SampleIteratorT h_samples,
+    SampleIteratorT d_samples)
 {
     OffsetT total_samples = num_rows * (row_stride_bytes / sizeof(SampleT));
 
     printf("\n----------------------------\n");
-    printf("%s cub::DeviceHistogramEven %d pixels (%d height, %d width, %d-byte row stride), %d %d-byte %s samples (entropy reduction %d), %s counters, %d/%d channels, max sample ",
+    printf("%s cub::DeviceHistogramEven (%s) %d pixels (%d height, %d width, %d-byte row stride), %d %d-byte %s samples (entropy reduction %d), %s counters, %d/%d channels, max sample ",
         (BACKEND == CDP) ? "CDP CUB" : (BACKEND == NPP) ? "NPP" : "CUB",
+        (IsPointer<SampleIteratorT>::VALUE) ? "pointer" : "iterator",
         (int) (num_row_pixels * num_rows),
         (int) num_rows,
         (int) num_row_pixels,
@@ -698,7 +729,6 @@ void TestEven(
     // Allocate and initialize host and device data
 
     typedef SampleT Foo;        // rename type to quelch gcc warnings (bug?)
-    SampleT*                    h_samples = new Foo[total_samples];
     CounterT*                   h_histogram[NUM_ACTIVE_CHANNELS];
     ScaleTransform<LevelT>      transform_op[NUM_ACTIVE_CHANNELS];
 
@@ -714,16 +744,12 @@ void TestEven(
             ((upper_level[channel] - lower_level[channel]) / bins));
     }
 
-    Initialize<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
-        max_level, entropy_reduction, h_samples, num_levels, transform_op, h_histogram, num_row_pixels, num_rows, row_stride_bytes);
+    InitializeBins<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
+        h_samples, num_levels, transform_op, h_histogram, num_row_pixels, num_rows, row_stride_bytes);
 
     // Allocate and initialize device data
 
-    SampleT*        d_samples = NULL;
-    CounterT*       d_histogram[NUM_ACTIVE_CHANNELS];
-
-    CubDebugExit(g_allocator.DeviceAllocate((void**)&d_samples, sizeof(SampleT) * total_samples));
-    CubDebugExit(cudaMemcpy(d_samples, h_samples, sizeof(SampleT) * total_samples, cudaMemcpyHostToDevice));
+    CounterT* d_histogram[NUM_ACTIVE_CHANNELS];
     for (int channel = 0; channel < NUM_ACTIVE_CHANNELS; ++channel)
     {
         CubDebugExit(g_allocator.DeviceAllocate((void**)&d_histogram[channel], sizeof(CounterT) * (num_levels[channel] - 1)));
@@ -740,25 +766,25 @@ void TestEven(
     void            *d_temp_storage = NULL;
     size_t          temp_storage_bytes = 0;
 
-    DispatchEven(
-        Int2Type<NUM_CHANNELS>(), Int2Type<NUM_ACTIVE_CHANNELS>(), Int2Type<BACKEND>(), 1, d_temp_storage_bytes, d_cdp_error,
+    Dispatch<NUM_ACTIVE_CHANNELS, NUM_CHANNELS, BACKEND>::Even(
+        1, d_temp_storage_bytes, d_cdp_error,
         d_temp_storage, temp_storage_bytes,
         d_samples, d_histogram, num_levels, lower_level, upper_level,
         num_row_pixels, num_rows, row_stride_bytes,
         0, true);
 
     // Allocate temporary storage with "canary" zones
-    int 	canary_bytes 	= 256;
-    char 	canary_token 	= 8;
-    char* 	canary_zone 	= new char[canary_bytes];
+    int     canary_bytes    = 256;
+    char    canary_token    = 8;
+    char*   canary_zone     = new char[canary_bytes];
 
     memset(canary_zone, canary_token, canary_bytes);
     CubDebugExit(g_allocator.DeviceAllocate(&d_temp_storage, temp_storage_bytes + (canary_bytes * 2)));
     CubDebugExit(cudaMemset(d_temp_storage, canary_token, temp_storage_bytes + (canary_bytes * 2)));
 
     // Run warmup/correctness iteration
-    DispatchEven(
-        Int2Type<NUM_CHANNELS>(), Int2Type<NUM_ACTIVE_CHANNELS>(), Int2Type<BACKEND>(), 1, d_temp_storage_bytes, d_cdp_error,
+    Dispatch<NUM_ACTIVE_CHANNELS, NUM_CHANNELS, BACKEND>::Even(
+        1, d_temp_storage_bytes, d_cdp_error,
         ((char *) d_temp_storage) + canary_bytes, temp_storage_bytes,
         d_samples, d_histogram, num_levels, lower_level, upper_level,
         num_row_pixels, num_rows, row_stride_bytes,
@@ -788,9 +814,9 @@ void TestEven(
     GpuTimer gpu_timer;
     gpu_timer.Start();
 
-    DispatchEven(
-        Int2Type<NUM_CHANNELS>(), Int2Type<NUM_ACTIVE_CHANNELS>(), Int2Type<BACKEND>(), g_timing_iterations, d_temp_storage_bytes, d_cdp_error,
-        d_temp_storage, temp_storage_bytes,
+    Dispatch<NUM_ACTIVE_CHANNELS, NUM_CHANNELS, BACKEND>::Even(
+        g_timing_iterations, d_temp_storage_bytes, d_cdp_error,
+        ((char *) d_temp_storage) + canary_bytes, temp_storage_bytes,
         d_samples, d_histogram, num_levels, lower_level, upper_level,
         num_row_pixels, num_rows, row_stride_bytes,
         0, false);
@@ -814,9 +840,6 @@ void TestEven(
 
     printf("\n\n");
 
-    // Cleanup
-    if (h_samples) delete[] h_samples;
-
     for (int channel = 0; channel < NUM_ACTIVE_CHANNELS; ++channel)
     {
         if (h_histogram[channel])
@@ -826,7 +849,6 @@ void TestEven(
             CubDebugExit(g_allocator.DeviceFree(d_histogram[channel]));
     }
 
-    if (d_samples) CubDebugExit(g_allocator.DeviceFree(d_samples));
     if (d_temp_storage_bytes) CubDebugExit(g_allocator.DeviceFree(d_temp_storage_bytes));
     if (d_cdp_error) CubDebugExit(g_allocator.DeviceFree(d_cdp_error));
     if (d_temp_storage) CubDebugExit(g_allocator.DeviceFree(d_temp_storage));
@@ -836,7 +858,82 @@ void TestEven(
 }
 
 
+/**
+ * Test histogram-even (native pointer input)
+ */
+template <
+    Backend         BACKEND,
+    int             NUM_CHANNELS,
+    int             NUM_ACTIVE_CHANNELS,
+    typename        SampleT,
+    typename        CounterT,
+    typename        LevelT,
+    typename        OffsetT>
+void TestEvenNative(
+    LevelT          max_level,
+    int             entropy_reduction,
+    int             num_levels[NUM_ACTIVE_CHANNELS],            ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
+    LevelT          lower_level[NUM_ACTIVE_CHANNELS],           ///< [in] The lower sample value bound (inclusive) for the lowest histogram bin in each active channel.
+    LevelT          upper_level[NUM_ACTIVE_CHANNELS],           ///< [in] The upper sample value bound (exclusive) for the highest histogram bin in each active channel.
+    OffsetT         num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
+    OffsetT         num_rows,                                   ///< [in] The number of rows in the region of interest
+    OffsetT         row_stride_bytes)                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+{
+    OffsetT total_samples = num_rows * (row_stride_bytes / sizeof(SampleT));
 
+    // Allocate and initialize host sample data
+    typedef SampleT Foo;        // rename type to quelch gcc warnings (bug?)
+    SampleT*                    h_samples = new Foo[total_samples];
+
+    InitializeSamples<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
+        max_level, entropy_reduction, h_samples, num_row_pixels, num_rows, row_stride_bytes);
+
+    // Allocate and initialize device data
+    SampleT* d_samples = NULL;
+    CubDebugExit(g_allocator.DeviceAllocate((void**)&d_samples, sizeof(SampleT) * total_samples));
+    CubDebugExit(cudaMemcpy(d_samples, h_samples, sizeof(SampleT) * total_samples, cudaMemcpyHostToDevice));
+
+    TestEven<BACKEND, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, SampleT, CounterT, LevelT, OffsetT>(
+        max_level, entropy_reduction, num_levels, lower_level, upper_level,
+        num_row_pixels, num_rows, row_stride_bytes,
+        h_samples, d_samples);
+
+    // Cleanup
+    if (h_samples) delete[] h_samples;
+    if (d_samples) CubDebugExit(g_allocator.DeviceFree(d_samples));
+}
+
+
+/**
+ * Test histogram-even (native pointer input)
+ */
+template <
+    Backend         BACKEND,
+    int             NUM_CHANNELS,
+    int             NUM_ACTIVE_CHANNELS,
+    typename        SampleT,
+    typename        CounterT,
+    typename        LevelT,
+    typename        OffsetT>
+void TestEvenIterator(
+    LevelT          max_level,
+    int             entropy_reduction,
+    int             num_levels[NUM_ACTIVE_CHANNELS],            ///< [in] The number of boundaries (levels) for delineating histogram samples in each active channel.  Implies that the number of bins for channel<sub><em>i</em></sub> is <tt>num_levels[i]</tt> - 1.
+    LevelT          lower_level[NUM_ACTIVE_CHANNELS],           ///< [in] The lower sample value bound (inclusive) for the lowest histogram bin in each active channel.
+    LevelT          upper_level[NUM_ACTIVE_CHANNELS],           ///< [in] The upper sample value bound (exclusive) for the highest histogram bin in each active channel.
+    OffsetT         num_row_pixels,                             ///< [in] The number of multi-channel pixels per row in the region of interest
+    OffsetT         num_rows,                                   ///< [in] The number of rows in the region of interest
+    OffsetT         row_stride_bytes)                                 ///< [in] The number of bytes between starts of consecutive rows in the region of interest
+{
+    SampleT sample = (SampleT) lower_level[0];
+    ConstantInputIterator<SampleT> sample_itr(sample);
+
+    TestEven<BACKEND, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, SampleT, CounterT, LevelT, OffsetT>(
+        max_level, entropy_reduction, num_levels, lower_level, upper_level,
+        num_row_pixels, num_rows, row_stride_bytes,
+        sample_itr, sample_itr);
+
+}
 
 
 /**
@@ -901,8 +998,11 @@ void TestRange(
         h_histogram[channel] = new CounterT[bins];
     }
 
-    Initialize<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
-        max_level, entropy_reduction, h_samples, num_levels, transform_op, h_histogram, num_row_pixels, num_rows, row_stride_bytes);
+    InitializeSamples<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
+        max_level, entropy_reduction, h_samples, num_row_pixels, num_rows, row_stride_bytes);
+
+    InitializeBins<NUM_CHANNELS, NUM_ACTIVE_CHANNELS>(
+        h_samples, num_levels, transform_op, h_histogram, num_row_pixels, num_rows, row_stride_bytes);
 
     // Allocate and initialize device data
     SampleT*        d_samples = NULL;
@@ -933,10 +1033,12 @@ void TestRange(
     void            *d_temp_storage = NULL;
     size_t          temp_storage_bytes = 0;
 
-    DispatchRange(
-        Int2Type<NUM_CHANNELS>(), Int2Type<NUM_ACTIVE_CHANNELS>(), Int2Type<BACKEND>(), 1, d_temp_storage_bytes, d_cdp_error,
+    Dispatch<NUM_ACTIVE_CHANNELS, NUM_CHANNELS, BACKEND>::Range(
+        1, d_temp_storage_bytes, d_cdp_error,
         d_temp_storage, temp_storage_bytes,
-        d_samples, d_histogram, num_levels, d_levels,
+        d_samples,
+        d_histogram,
+        num_levels, d_levels,
         num_row_pixels, num_rows, row_stride_bytes,
         0, true);
 
@@ -950,10 +1052,12 @@ void TestRange(
     CubDebugExit(cudaMemset(d_temp_storage, canary_token, temp_storage_bytes + (canary_bytes * 2)));
 
     // Run warmup/correctness iteration
-    DispatchRange(
-        Int2Type<NUM_CHANNELS>(), Int2Type<NUM_ACTIVE_CHANNELS>(), Int2Type<BACKEND>(), 1, d_temp_storage_bytes, d_cdp_error,
+    Dispatch<NUM_ACTIVE_CHANNELS, NUM_CHANNELS, BACKEND>::Range(
+        1, d_temp_storage_bytes, d_cdp_error,
         ((char *) d_temp_storage) + canary_bytes, temp_storage_bytes,
-        d_samples, d_histogram, num_levels, d_levels,
+        d_samples,
+        d_histogram,
+        num_levels, d_levels,
         num_row_pixels, num_rows, row_stride_bytes,
         0, true);
 
@@ -981,10 +1085,12 @@ void TestRange(
     GpuTimer gpu_timer;
     gpu_timer.Start();
 
-    DispatchRange(
-        Int2Type<NUM_CHANNELS>(), Int2Type<NUM_ACTIVE_CHANNELS>(), Int2Type<BACKEND>(), g_timing_iterations, d_temp_storage_bytes, d_cdp_error,
-        d_temp_storage, temp_storage_bytes,
-        d_samples, d_histogram, num_levels, d_levels,
+    Dispatch<NUM_ACTIVE_CHANNELS, NUM_CHANNELS, BACKEND>::Range(
+        g_timing_iterations, d_temp_storage_bytes, d_cdp_error,
+        ((char *) d_temp_storage) + canary_bytes, temp_storage_bytes,
+        d_samples,
+        d_histogram,
+        num_levels, d_levels,
         num_row_pixels, num_rows, row_stride_bytes,
         0, false);
 
@@ -1067,7 +1173,12 @@ void TestEven(
         upper_level[channel] = (max_level + (num_bins * min_level_increment)) / 2;
     }
 
-    TestEven<BACKEND, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, SampleT, CounterT, LevelT, OffsetT>(
+    // Test pointer-based samples
+    TestEvenNative<BACKEND, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, SampleT, CounterT, LevelT, OffsetT>(
+        max_level, entropy_reduction, num_levels, lower_level, upper_level, num_row_pixels, num_rows, row_stride_bytes);
+
+    // Test iterator-based samples (CUB-only)
+    TestEvenIterator<CUB, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, SampleT, CounterT, LevelT, OffsetT>(
         max_level, entropy_reduction, num_levels, lower_level, upper_level, num_row_pixels, num_rows, row_stride_bytes);
 }
 
@@ -1166,13 +1277,14 @@ void Test(
 {
     int num_levels[NUM_ACTIVE_CHANNELS];
 
-    // All the same level
-    for (int channel = 0; channel < NUM_ACTIVE_CHANNELS; ++channel)
-    {
-        num_levels[channel] = max_num_levels;
-    }
-    Test<SampleT, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, CounterT, LevelT, OffsetT>(
-        num_row_pixels, num_rows, row_stride_bytes, entropy_reduction, num_levels, max_level, max_num_levels);
+// Unnecessary testing
+//    // All the same level
+//    for (int channel = 0; channel < NUM_ACTIVE_CHANNELS; ++channel)
+//    {
+//        num_levels[channel] = max_num_levels;
+//    }
+//    Test<SampleT, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, CounterT, LevelT, OffsetT>(
+//        num_row_pixels, num_rows, row_stride_bytes, entropy_reduction, num_levels, max_level, max_num_levels);
 
     // All different levels
     num_levels[0] = max_num_levels;
@@ -1256,7 +1368,7 @@ void Test(
     LevelT          max_level,
     int             max_num_levels)
 {
-    // 0 images
+    // 0 row/col images
     Test<SampleT, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, CounterT, LevelT, OffsetT>(
         OffsetT(1920), OffsetT(0), max_level, max_num_levels);
     Test<SampleT, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, CounterT, LevelT, OffsetT>(
@@ -1266,14 +1378,10 @@ void Test(
     Test<SampleT, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, CounterT, LevelT, OffsetT>(
         OffsetT(1920), OffsetT(1080), max_level, max_num_levels);
 
-    // 720 image
-    Test<SampleT, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, CounterT, LevelT, OffsetT>(
-        OffsetT(1280), OffsetT(720), max_level, max_num_levels);
-
-    // Sample different image sizes
-    for (OffsetT rows = 1; rows < 1000000; rows *= 100)
+    // Sample different aspect ratios sizes
+    for (OffsetT rows = 1; rows < 1000000; rows *= 1000)
     {
-        for (OffsetT cols = 1; cols < (1000000 / rows); cols *= 100)
+        for (OffsetT cols = 1; cols < (1000000 / rows); cols *= 1000)
         {
             Test<SampleT, NUM_CHANNELS, NUM_ACTIVE_CHANNELS, CounterT, LevelT, OffsetT>(
                 cols, rows, max_level, max_num_levels);
@@ -1282,7 +1390,7 @@ void Test(
 
     // Randomly select linear problem size between 1:10,000,000
     unsigned int max_int = (unsigned int) -1;
-    for (int i = 0; i < 10; ++i)
+    for (int i = 0; i < 4; ++i)
     {
         unsigned int num_items;
         RandomBits(num_items);
@@ -1361,8 +1469,9 @@ int main(int argc, char** argv)
     args.GetCmdLineArgument("i", g_timing_iterations);
     args.GetCmdLineArgument("repeat", g_repeat);
     args.GetCmdLineArgument("entropy", entropy_reduction);
-
+#if defined(QUICK_TEST) || defined(QUICKER_TEST)
     bool compare_npp = args.CheckCmdLineFlag("npp");
+#endif
 
 
     // Print usage
@@ -1412,6 +1521,19 @@ int main(int argc, char** argv)
         if (compare_npp)
             TestEven<NPP, SampleT, 1, 1, int, LevelT, int>(num_row_pixels, num_rows, row_stride_bytes, entropy_reduction, num_levels, max_level, num_levels[0]);
     }
+
+    {
+        // HistogramRange: signed char 256 bins
+        typedef signed char         SampleT;
+        typedef int                 LevelT;
+
+        LevelT  max_level           = 256;
+        int     num_levels[1]       = {257};
+        int     row_stride_bytes    = sizeof(SampleT) * row_stride_pixels * 1;
+
+        TestRange<CUB, SampleT, 1, 1, int, LevelT, int>(num_row_pixels, num_rows, row_stride_bytes, entropy_reduction, num_levels, max_level, num_levels[0]);
+    }
+
 
 
 #elif defined(QUICK_TEST)

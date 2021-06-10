@@ -1,7 +1,7 @@
 
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -174,7 +174,8 @@ struct DispatchScan
     struct Policy600
     {
         typedef AgentScanPolicy<
-            CUB_NOMINAL_CONFIG(128, 15, OutputT),      ///< Threads per block, items per thread
+                128, 15,                                        ///< Threads per block, items per thread
+                OutputT,
                 BLOCK_LOAD_TRANSPOSE,
                 LOAD_DEFAULT,
                 BLOCK_STORE_TRANSPOSE,
@@ -188,7 +189,8 @@ struct DispatchScan
     {
         // Titan X: 32.47B items/s @ 48M 32-bit T
         typedef AgentScanPolicy<
-                CUB_NOMINAL_CONFIG(128, 12, OutputT),      ///< Threads per block, items per thread
+                128, 12,                                        ///< Threads per block, items per thread
+                OutputT,
                 BLOCK_LOAD_DIRECT,
                 LOAD_LDG,
                 BLOCK_STORE_WARP_TRANSPOSE,
@@ -202,7 +204,8 @@ struct DispatchScan
     {
         // GTX Titan: 29.5B items/s (232.4 GB/s) @ 48M 32-bit T
         typedef AgentScanPolicy<
-                CUB_NOMINAL_CONFIG(128, 12, OutputT),      ///< Threads per block, items per thread
+                128, 12,                                        ///< Threads per block, items per thread
+                OutputT,
                 BLOCK_LOAD_DIRECT,
                 LOAD_LDG,
                 BLOCK_STORE_WARP_TRANSPOSE_TIMESLICED,
@@ -214,7 +217,8 @@ struct DispatchScan
     struct Policy300
     {
         typedef AgentScanPolicy<
-                CUB_NOMINAL_CONFIG(256, 9, OutputT),      ///< Threads per block, items per thread
+                256, 9,                                         ///< Threads per block, items per thread
+                OutputT,
                 BLOCK_LOAD_WARP_TRANSPOSE,
                 LOAD_DEFAULT,
                 BLOCK_STORE_WARP_TRANSPOSE,
@@ -227,7 +231,8 @@ struct DispatchScan
     {
         // GTX 580: 20.3B items/s (162.3 GB/s) @ 48M 32-bit T
         typedef AgentScanPolicy<
-                CUB_NOMINAL_CONFIG(128, 12, OutputT),      ///< Threads per block, items per thread
+                128, 12,                                        ///< Threads per block, items per thread
+                OutputT,
                 BLOCK_LOAD_WARP_TRANSPOSE,
                 LOAD_DEFAULT,
                 BLOCK_STORE_WARP_TRANSPOSE,
@@ -239,7 +244,8 @@ struct DispatchScan
     struct Policy130
     {
         typedef AgentScanPolicy<
-                CUB_NOMINAL_CONFIG(96, 21, OutputT),      ///< Threads per block, items per thread
+                96, 21,                                         ///< Threads per block, items per thread
+                OutputT,
                 BLOCK_LOAD_WARP_TRANSPOSE,
                 LOAD_DEFAULT,
                 BLOCK_STORE_WARP_TRANSPOSE,
@@ -251,7 +257,8 @@ struct DispatchScan
     struct Policy100
     {
         typedef AgentScanPolicy<
-                CUB_NOMINAL_CONFIG(64, 9, OutputT),      ///< Threads per block, items per thread
+                64, 9,                                          ///< Threads per block, items per thread
+                OutputT,
                 BLOCK_LOAD_WARP_TRANSPOSE,
                 LOAD_DEFAULT,
                 BLOCK_STORE_WARP_TRANSPOSE,
@@ -432,7 +439,7 @@ struct DispatchScan
             if (CubDebug(error = ScanTileStateT::AllocationSize(num_tiles, allocation_sizes[0]))) break;    // bytes needed for tile status descriptors
 
             // Compute allocation pointers into the single storage blob (or compute the necessary size of the blob)
-            void* allocations[1];
+            void* allocations[1] = {};
             if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
             if (d_temp_storage == NULL)
             {
@@ -526,7 +533,7 @@ struct DispatchScan
         do
         {
             // Get PTX version
-            int ptx_version;
+            int ptx_version = 0;
             if (CubDebug(error = PtxVersion(ptx_version))) break;
 
             // Get kernel kernel dispatch configurations
