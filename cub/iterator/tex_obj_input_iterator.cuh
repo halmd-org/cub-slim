@@ -40,7 +40,7 @@
 #include "../thread/thread_store.cuh"
 #include "../util_device.cuh"
 #include "../util_debug.cuh"
-#include "../util_namespace.cuh"
+#include "../config.cuh"
 
 #if (THRUST_VERSION >= 100700)
     // This iterator is compatible with Thrust API 1.7 and newer
@@ -66,18 +66,18 @@ namespace cub {
  * \brief A random-access input wrapper for dereferencing array values through texture cache.  Uses newer Kepler-style texture objects.
  *
  * \par Overview
- * - TexObjInputIteratorTwraps a native device pointer of type <tt>ValueType*</tt>. References
+ * - TexObjInputIterator wraps a native device pointer of type <tt>ValueType*</tt>. References
  *   to elements are to be loaded through texture cache.
  * - Can be used to load any data type from memory through texture cache.
  * - Can be manipulated and exchanged within and between host and device
  *   functions, can only be constructed within host functions, and can only be
  *   dereferenced within device functions.
- * - With regard to nested/dynamic parallelism, TexObjInputIteratorTiterators may only be
+ * - With regard to nested/dynamic parallelism, TexObjInputIterator iterators may only be
  *   created by the host thread, but can be used by any descendant kernel.
  * - Compatible with Thrust API v1.7 or newer.
  *
  * \par Snippet
- * The code snippet below illustrates the use of \p TexRefInputIteratorTto
+ * The code snippet below illustrates the use of \p TexRefInputIterator to
  * dereference a device array of doubles through texture cache.
  * \par
  * \code
@@ -204,24 +204,32 @@ public:
     /// Indirection
     __host__ __device__ __forceinline__ reference operator*() const
     {
-#if (CUB_PTX_ARCH == 0)
-        // Simply dereference the pointer on the host
-        return ptr[tex_offset];
-#else
-        // Move array of uninitialized words, then alias and assign to return value
-        TextureWord words[TEXTURE_MULTIPLE];
+        if (CUB_IS_HOST_CODE) {
+            #if CUB_INCLUDE_HOST_CODE
+                // Simply dereference the pointer on the host
+                return ptr[tex_offset];
+            #endif
+        } else {
+            #if CUB_INCLUDE_DEVICE_CODE
+                // Move array of uninitialized words, then alias and assign to return value
+                TextureWord words[TEXTURE_MULTIPLE];
 
-        #pragma unroll
-        for (int i = 0; i < TEXTURE_MULTIPLE; ++i)
-        {
-            words[i] = tex1Dfetch<TextureWord>(
-                tex_obj,
-                (tex_offset * TEXTURE_MULTIPLE) + i);
+                #pragma unroll
+                for (int i = 0; i < TEXTURE_MULTIPLE; ++i)
+                {
+                    words[i] = tex1Dfetch<TextureWord>(
+                        tex_obj,
+                        (tex_offset * TEXTURE_MULTIPLE) + i);
+                }
+
+                // Load from words
+                return *reinterpret_cast<T*>(words);
+            #else
+                // This is dead code which will never be executed.  It is here
+                // only to avoid warnings about missing return statements.
+                return ptr[tex_offset];
+            #endif
         }
-
-        // Load from words
-        return *reinterpret_cast<T*>(words);
-#endif
     }
 
     /// Addition

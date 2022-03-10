@@ -33,11 +33,10 @@
 
 #pragma once
 
+#include "../../config.cuh"
 #include "../../thread/thread_operators.cuh"
 #include "../../util_ptx.cuh"
 #include "../../util_type.cuh"
-#include "../../util_macro.cuh"
-#include "../../util_namespace.cuh"
 
 #include <stdint.h>
 
@@ -98,10 +97,10 @@ struct WarpReduceShfl
     //---------------------------------------------------------------------
 
     /// Lane index in logical warp
-    uint32_t lane_id;
+    int lane_id;
 
     /// Logical warp index in 32-thread physical warp
-    uint32_t warp_id;
+    int warp_id;
 
     /// 32-thread physical warp member mask of logical warp
     uint32_t member_mask;
@@ -115,7 +114,7 @@ struct WarpReduceShfl
     __device__ __forceinline__ WarpReduceShfl(
         TempStorage &/*temp_storage*/)
     {
-        lane_id = LaneId();
+        lane_id = static_cast<int>(LaneId());
         warp_id = 0;
         member_mask = 0xffffffffu >> (CUB_WARP_THREADS(PTX_ARCH) - LOGICAL_WARP_THREADS);
 

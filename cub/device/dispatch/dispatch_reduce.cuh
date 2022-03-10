@@ -42,9 +42,11 @@
 #include "../../thread/thread_operators.cuh"
 #include "../../grid/grid_even_share.cuh"
 #include "../../iterator/arg_index_input_iterator.cuh"
+#include "../../config.cuh"
 #include "../../util_debug.cuh"
 #include "../../util_device.cuh"
-#include "../../util_namespace.cuh"
+
+#include <thrust/system/cuda/detail/core/triple_chevron_launch.h>
 
 /// Optional outer namespace(s)
 CUB_NS_PREFIX
@@ -360,13 +362,14 @@ template <
     typename OutputT =          ///< Data type of the output iterator
         typename If<(Equals<typename std::iterator_traits<OutputIteratorT>::value_type, void>::VALUE),  // OutputT =  (if output iterator's value type is void) ?
             typename std::iterator_traits<InputIteratorT>::value_type,                                  // ... then the input iterator's value type,
-            typename std::iterator_traits<OutputIteratorT>::value_type>::Type>                          // ... else the output iterator's value type
-struct DispatchReduce :
-    DeviceReducePolicy<
+            typename std::iterator_traits<OutputIteratorT>::value_type>::Type,                          // ... else the output iterator's value type
+    typename SelectedPolicy = DeviceReducePolicy<
         typename std::iterator_traits<InputIteratorT>::value_type,
         OutputT,
         OffsetT,
-        ReductionOpT>
+        ReductionOpT> >
+struct DispatchReduce :
+    SelectedPolicy
 {
     //------------------------------------------------------------------------------
     // Problem state
@@ -449,7 +452,9 @@ struct DispatchReduce :
                 ActivePolicyT::SingleTilePolicy::ITEMS_PER_THREAD);
 
             // Invoke single_reduce_sweep_kernel
-            single_tile_kernel<<<1, ActivePolicyT::SingleTilePolicy::BLOCK_THREADS, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                1, ActivePolicyT::SingleTilePolicy::BLOCK_THREADS, 0, stream
+            ).doit(single_tile_kernel,
                 d_in,
                 d_out,
                 num_items,
@@ -543,7 +548,10 @@ struct DispatchReduce :
                 reduce_config.sm_occupancy);
 
             // Invoke DeviceReduceKernel
-            reduce_kernel<<<reduce_grid_size, ActivePolicyT::ReducePolicy::BLOCK_THREADS, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                reduce_grid_size, ActivePolicyT::ReducePolicy::BLOCK_THREADS,
+                0, stream
+            ).doit(reduce_kernel,
                 d_in,
                 d_block_reductions,
                 num_items,
@@ -563,7 +571,9 @@ struct DispatchReduce :
                 ActivePolicyT::SingleTilePolicy::ITEMS_PER_THREAD);
 
             // Invoke DeviceReduceSingleTileKernel
-            single_tile_kernel<<<1, ActivePolicyT::SingleTilePolicy::BLOCK_THREADS, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                1, ActivePolicyT::SingleTilePolicy::BLOCK_THREADS, 0, stream
+            ).doit(single_tile_kernel,
                 d_block_reductions,
                 d_out,
                 reduce_grid_size,
@@ -675,13 +685,14 @@ template <
     typename OutputT =          ///< Data type of the output iterator
         typename If<(Equals<typename std::iterator_traits<OutputIteratorT>::value_type, void>::VALUE),  // OutputT =  (if output iterator's value type is void) ?
             typename std::iterator_traits<InputIteratorT>::value_type,                                  // ... then the input iterator's value type,
-            typename std::iterator_traits<OutputIteratorT>::value_type>::Type>                          // ... else the output iterator's value type
-struct DispatchSegmentedReduce :
-    DeviceReducePolicy<
+            typename std::iterator_traits<OutputIteratorT>::value_type>::Type,                          // ... else the output iterator's value type
+    typename SelectedPolicy = DeviceReducePolicy<
         typename std::iterator_traits<InputIteratorT>::value_type,
         OutputT,
         OffsetT,
-        ReductionOpT>
+        ReductionOpT> >
+struct DispatchSegmentedReduce :
+    SelectedPolicy
 {
     //------------------------------------------------------------------------------
     // Problem state
@@ -776,7 +787,10 @@ struct DispatchSegmentedReduce :
                 segmented_reduce_config.sm_occupancy);
 
             // Invoke DeviceReduceKernel
-            segmented_reduce_kernel<<<num_segments, ActivePolicyT::SegmentedReducePolicy::BLOCK_THREADS, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                num_segments,
+                ActivePolicyT::SegmentedReducePolicy::BLOCK_THREADS, 0, stream
+            ).doit(segmented_reduce_kernel,
                 d_in,
                 d_out,
                 d_begin_offsets,

@@ -40,7 +40,7 @@
 #include "../thread/thread_store.cuh"
 #include "../util_device.cuh"
 #include "../util_debug.cuh"
-#include "../util_namespace.cuh"
+#include "../config.cuh"
 
 #if (CUDART_VERSION >= 5050) || defined(DOXYGEN_ACTIVE)  // This iterator is compatible with CUDA 5.5 and newer
 
@@ -151,24 +151,24 @@ typename IteratorTexRef<T>::template TexId<UNIQUE_ID>::TexRef IteratorTexRef<T>:
  * \brief A random-access input wrapper for dereferencing array values through texture cache.  Uses older Tesla/Fermi-style texture references.
  *
  * \par Overview
- * - TexRefInputIteratorTwraps a native device pointer of type <tt>ValueType*</tt>. References
+ * - TexRefInputIterator wraps a native device pointer of type <tt>ValueType*</tt>. References
  *   to elements are to be loaded through texture cache.
  * - Can be used to load any data type from memory through texture cache.
  * - Can be manipulated and exchanged within and between host and device
  *   functions, can only be constructed within host functions, and can only be
  *   dereferenced within device functions.
  * - The \p UNIQUE_ID template parameter is used to statically name the underlying texture
- *   reference.  Only one TexRefInputIteratorTinstance can be bound at any given time for a
+ *   reference.  Only one TexRefInputIterator instance can be bound at any given time for a
  *   specific combination of (1) data type \p T, (2) \p UNIQUE_ID, (3) host
  *   thread, and (4) compilation .o unit.
- * - With regard to nested/dynamic parallelism, TexRefInputIteratorTiterators may only be
+ * - With regard to nested/dynamic parallelism, TexRefInputIterator iterators may only be
  *   created by the host thread and used by a top-level kernel (i.e. the one which is launched
  *   from the host).
  * - Compatible with Thrust API v1.7 or newer.
  * - Compatible with CUDA toolkit v5.5 or newer.
  *
  * \par Snippet
- * The code snippet below illustrates the use of \p TexRefInputIteratorTto
+ * The code snippet below illustrates the use of \p TexRefInputIterator to
  * dereference a device array of doubles through texture cache.
  * \par
  * \code
@@ -279,13 +279,19 @@ public:
     /// Indirection
     __host__ __device__ __forceinline__ reference operator*() const
     {
-#if (CUB_PTX_ARCH == 0)
-        // Simply dereference the pointer on the host
-        return ptr[tex_offset];
-#else
-        // Use the texture reference
-        return TexId::Fetch(tex_offset);
-#endif
+        if (CUB_IS_HOST_CODE) {
+            // Simply dereference the pointer on the host
+            return ptr[tex_offset];
+        } else {
+            #if CUB_INCLUDE_DEVICE_CODE
+                // Use the texture reference
+                return TexId::Fetch(tex_offset);
+            #else
+                // This is dead code that will never be executed.  It is here
+                // only to avoid warnings about missing returns.
+                return ptr[tex_offset];
+            #endif
+        }
     }
 
     /// Addition

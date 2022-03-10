@@ -39,9 +39,9 @@
 #include "../block/block_load.cuh"
 #include "../block/block_store.cuh"
 #include "../block/block_scan.cuh"
+#include "../config.cuh"
 #include "../grid/grid_queue.cuh"
 #include "../iterator/cache_modified_input_iterator.cuh"
-#include "../util_namespace.cuh"
 
 /// Optional outer namespace(s)
 CUB_NS_PREFIX
@@ -64,9 +64,11 @@ template <
     BlockLoadAlgorithm          _LOAD_ALGORITHM,                ///< The BlockLoad algorithm to use
     CacheLoadModifier           _LOAD_MODIFIER,                 ///< Cache load modifier for reading input elements
     BlockStoreAlgorithm         _STORE_ALGORITHM,               ///< The BlockStore algorithm to use
-    BlockScanAlgorithm          _SCAN_ALGORITHM>                ///< The BlockScan algorithm to use
+    BlockScanAlgorithm          _SCAN_ALGORITHM,                ///< The BlockScan algorithm to use
+    typename                    ScalingType =  MemBoundScaling<NOMINAL_BLOCK_THREADS_4B, NOMINAL_ITEMS_PER_THREAD_4B, ComputeT> >
+
 struct AgentScanPolicy :
-    MemBoundScaling<NOMINAL_BLOCK_THREADS_4B, NOMINAL_ITEMS_PER_THREAD_4B, ComputeT>
+    ScalingType
 {
     static const BlockLoadAlgorithm     LOAD_ALGORITHM          = _LOAD_ALGORITHM;          ///< The BlockLoad algorithm to use
     static const CacheLoadModifier      LOAD_MODIFIER           = _LOAD_MODIFIER;           ///< Cache load modifier for reading input elements

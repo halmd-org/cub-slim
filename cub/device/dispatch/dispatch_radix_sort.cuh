@@ -41,11 +41,13 @@
 #include "../../agent/agent_radix_sort_downsweep.cuh"
 #include "../../agent/agent_scan.cuh"
 #include "../../block/block_radix_sort.cuh"
+#include "../../config.cuh"
 #include "../../grid/grid_even_share.cuh"
 #include "../../util_type.cuh"
 #include "../../util_debug.cuh"
 #include "../../util_device.cuh"
-#include "../../util_namespace.cuh"
+
+#include <thrust/system/cuda/detail/core/triple_chevron_launch.h>
 
 /// Optional outer namespace(s)
 CUB_NS_PREFIX
@@ -818,9 +820,10 @@ template <
     bool     IS_DESCENDING, ///< Whether or not the sorted-order is high-to-low
     typename KeyT,          ///< Key type
     typename ValueT,        ///< Value type
-    typename OffsetT>       ///< Signed integer type for global offsets
+    typename OffsetT,       ///< Signed integer type for global offsets
+    typename SelectedPolicy = DeviceRadixSortPolicy<KeyT, ValueT, OffsetT> >
 struct DispatchRadixSort :
-    DeviceRadixSortPolicy<KeyT, ValueT, OffsetT>
+    SelectedPolicy
 {
     //------------------------------------------------------------------------------
     // Constants
@@ -921,7 +924,9 @@ struct DispatchRadixSort :
                     ActivePolicyT::SingleTilePolicy::ITEMS_PER_THREAD, 1, begin_bit, ActivePolicyT::SingleTilePolicy::RADIX_BITS);
 
             // Invoke upsweep_kernel with same grid size as downsweep_kernel
-            single_tile_kernel<<<1, ActivePolicyT::SingleTilePolicy::BLOCK_THREADS, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                1, ActivePolicyT::SingleTilePolicy::BLOCK_THREADS, 0, stream
+            ).doit(single_tile_kernel,
                 d_keys.Current(),
                 d_keys.Alternate(),
                 d_values.Current(),
@@ -979,7 +984,10 @@ struct DispatchRadixSort :
                 pass_config.upsweep_config.items_per_thread, pass_config.upsweep_config.sm_occupancy, current_bit, pass_bits);
 
             // Invoke upsweep_kernel with same grid size as downsweep_kernel
-            pass_config.upsweep_kernel<<<pass_config.even_share.grid_size, pass_config.upsweep_config.block_threads, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                pass_config.even_share.grid_size,
+                pass_config.upsweep_config.block_threads, 0, stream
+            ).doit(pass_config.upsweep_kernel,
                 d_keys_in,
                 d_spine,
                 num_items,
@@ -998,7 +1006,9 @@ struct DispatchRadixSort :
                 1, pass_config.scan_config.block_threads, (long long) stream, pass_config.scan_config.items_per_thread);
 
             // Invoke scan_kernel
-            pass_config.scan_kernel<<<1, pass_config.scan_config.block_threads, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                1, pass_config.scan_config.block_threads, 0, stream
+            ).doit(pass_config.scan_kernel,
                 d_spine,
                 spine_length);
 
@@ -1014,7 +1024,10 @@ struct DispatchRadixSort :
                 pass_config.downsweep_config.items_per_thread, pass_config.downsweep_config.sm_occupancy);
 
             // Invoke downsweep_kernel
-            pass_config.downsweep_kernel<<<pass_config.even_share.grid_size, pass_config.downsweep_config.block_threads, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                pass_config.even_share.grid_size,
+                pass_config.downsweep_config.block_threads, 0, stream
+            ).doit(pass_config.downsweep_kernel,
                 d_keys_in,
                 d_keys_out,
                 d_values_in,
@@ -1318,9 +1331,10 @@ template <
     typename KeyT,              ///< Key type
     typename ValueT,            ///< Value type
     typename OffsetIteratorT,   ///< Random-access input iterator type for reading segment offsets \iterator
-    typename OffsetT>           ///< Signed integer type for global offsets
+    typename OffsetT,           ///< Signed integer type for global offsets
+    typename SelectedPolicy = DeviceRadixSortPolicy<KeyT, ValueT, OffsetT> >
 struct DispatchSegmentedRadixSort :
-    DeviceRadixSortPolicy<KeyT, ValueT, OffsetT>
+    SelectedPolicy
 {
     //------------------------------------------------------------------------------
     // Constants
@@ -1414,11 +1428,23 @@ struct DispatchSegmentedRadixSort :
 
             // Log kernel configuration
             if (debug_synchronous)
-                _CubLog("Invoking segmented_kernels<<<%d, %d, 0, %lld>>>(), %d items per thread, %d SM occupancy, current bit %d, bit_grain %d\n",
-                    num_segments, pass_config.segmented_config.block_threads, (long long) stream,
-                pass_config.segmented_config.items_per_thread, pass_config.segmented_config.sm_occupancy, current_bit, pass_bits);
+            {
+              _CubLog("Invoking segmented_kernels<<<%lld, %lld, 0, %lld>>>(), "
+                      "%lld items per thread, %lld SM occupancy, "
+                      "current bit %d, bit_grain %d\n",
+                      (long long)num_segments,
+                      (long long)pass_config.segmented_config.block_threads,
+                      (long long)stream,
+                      (long long)pass_config.segmented_config.items_per_thread,
+                      (long long)pass_config.segmented_config.sm_occupancy,
+                      current_bit,
+                      pass_bits);
+            }
 
-            pass_config.segmented_kernel<<<num_segments, pass_config.segmented_config.block_threads, 0, stream>>>(
+            thrust::cuda_cub::launcher::triple_chevron(
+                num_segments, pass_config.segmented_config.block_threads, 0,
+                stream
+            ).doit(pass_config.segmented_kernel,
                 d_keys_in, d_keys_out,
                 d_values_in,  d_values_out,
                 d_begin_offsets, d_end_offsets, num_segments,
